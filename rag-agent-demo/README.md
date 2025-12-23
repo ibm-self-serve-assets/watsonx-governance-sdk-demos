@@ -1,4 +1,4 @@
-# RAG Agent - Agentic Governance Demo
+# RAG Agent - watsonx.governance Demo
 
 The `rag_agent_demo` notebook demonstrates how to leverage the watsonx.governance sdk to govern a LangGraph RAG agent.
 
