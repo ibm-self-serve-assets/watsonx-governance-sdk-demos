@@ -1,0 +1,13 @@
+# watsonx.ai environment variables
+
+WATSONX_APIKEY=
+WATSONX_URL=<https://us-south.ml.cloud.ibm.com>
+WATSONX_PROJECT_ID=
+
+# watsonx governance environment variables
+
+SERVICE_INSTANCE_ID=
+
+# tavily environment variables
+
+TAVILY_API_KEY=
