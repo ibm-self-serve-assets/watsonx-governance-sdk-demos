@@ -2,3 +2,5 @@
 /demo-env
 .env
 inference_engine_cache
+rag_agent_demo.egg-info
+wxgov_traces
