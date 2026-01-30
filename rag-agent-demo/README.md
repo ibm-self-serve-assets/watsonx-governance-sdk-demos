@@ -22,10 +22,10 @@ The `rag_agent_demo` notebook demonstrates how to leverage the watsonx.governanc
     git clone git@github.com:ibm-self-serve-assets/watsonx-governance-sdk-demos.git
     ```
 
-2. Change directory into `rag-agent-demo`
+2. Change directory into `watsonx-governance-sdk-demos/rag-agent-demo`
 
     ```bash
-    cd /rag-agent-demo
+    cd watsonx-governance-sdk-demos/rag-agent-demo
     ```
 
 3. Create a python virtual environment and install dependencies
