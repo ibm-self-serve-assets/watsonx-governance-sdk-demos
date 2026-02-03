@@ -4,4 +4,6 @@
 .env
 inference_engine_cache
 rag_agent_demo.egg-info
+evaluate_metrics.egg-info
+*.egg-info
 wxgov_traces
