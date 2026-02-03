@@ -1,0 +1,15 @@
+[project]
+name = "evaluate-metrics"
+version = "0.1.0"
+description = "governance sdk demo showcasing metrics"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "python-dotenv>=1.0.1",
+    "ibm-watsonx-gov[metrics]",
+
+]
+
+[tool.setuptools.packages.find]
+include = ["studio*"]
