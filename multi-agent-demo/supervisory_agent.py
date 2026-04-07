@@ -123,14 +123,23 @@ class SupervisoryAgent:
     
     def _interpret_intent(self, seller_query: str) -> dict:
         """
-        Interpret seller's intent and extract key information.
-        
-        Args:
-            seller_query: Natural language query from seller
-            
-        Returns:
-            Dictionary with intent, partner name, and workflow type
+        Interpret seller intent with a rule-based fallback to avoid workflow failure
+        when Watsonx rate limits are hit.
         """
+        normalized_query = seller_query.lower()
+
+        fallback_partner = "Confluent" if "confluent" in normalized_query else "Unknown"
+        fallback_workflow = "contract_analysis" if any(
+            token in normalized_query for token in ["contract", "renewal", "expired", "cpo", "email", "next step"]
+        ) else "general_inquiry"
+
+        intent_data = {
+            "raw_interpretation": "RULE_BASED_FALLBACK",
+            "timestamp": datetime.now().isoformat(),
+            "partner_name": fallback_partner,
+            "workflow_type": fallback_workflow
+        }
+
         intent_prompt = ChatPromptTemplate.from_template(
             "You are a sales workflow assistant. Analyze this seller query and extract:\n\n"
             "Query: {query}\n\n"
@@ -141,36 +150,38 @@ class SupervisoryAgent:
             "CONTRACT_MENTIONED: [yes/no]\n"
             "KEY_ENTITIES: [Any other important entities mentioned]\n"
         )
-        
-        llm = WatsonxLLM(
-            model_id=self.model_id,
-            url=self.url,
-            apikey=self.apikey,
-            project_id=self.project_id,
-            params={
-                "max_new_tokens": 300,
-                "temperature": 0.1,
-                "decoding_method": "greedy"
-            }
-        )
-        
-        formatted_prompt = intent_prompt.invoke({"query": seller_query})
-        result = llm.invoke(formatted_prompt)
-        intent_text = result.content if hasattr(result, "content") else str(result)
-        
-        # Parse the intent
-        intent_data = {
-            "raw_interpretation": intent_text,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Extract partner name from interpretation
-        for line in intent_text.split('\n'):
-            if 'PARTNER_NAME:' in line:
-                partner_name = line.split('PARTNER_NAME:')[1].strip()
-                if partner_name and partner_name.lower() != 'unknown':
-                    intent_data['partner_name'] = partner_name
-        
+
+        try:
+            llm = WatsonxLLM(
+                model_id=self.model_id,
+                url=self.url,
+                apikey=self.apikey,
+                project_id=self.project_id,
+                params={
+                    "max_new_tokens": 300,
+                    "temperature": 0.1,
+                    "decoding_method": "greedy"
+                }
+            )
+
+            formatted_prompt = intent_prompt.invoke({"query": seller_query})
+            result = llm.invoke(formatted_prompt)
+            intent_text = result.content if hasattr(result, "content") else str(result)
+            intent_data["raw_interpretation"] = intent_text
+
+            for line in intent_text.split('\n'):
+                if 'PARTNER_NAME:' in line:
+                    partner_name = line.split('PARTNER_NAME:')[1].strip()
+                    if partner_name and partner_name.lower() != 'unknown':
+                        intent_data['partner_name'] = partner_name
+                elif 'WORKFLOW_TYPE:' in line:
+                    workflow_type = line.split('WORKFLOW_TYPE:')[1].strip()
+                    if workflow_type:
+                        intent_data['workflow_type'] = workflow_type
+
+        except Exception as e:
+            intent_data["fallback_reason"] = str(e)
+
         return intent_data
     
     def build_agent(self):
@@ -189,7 +200,19 @@ class SupervisoryAgent:
             intent_data = self._interpret_intent(seller_query)
             
             # Determine required agents
-            required_agents = ["contract", "research", "action"]
+            lowered_query = seller_query.lower()
+            if "next month" in lowered_query or "next 30 days" in lowered_query:
+                workflow_type = "portfolio_overview_30_day_actions"
+                required_agents = ["contract", "action"]
+            elif "renewal" in lowered_query or "expired" in lowered_query or "expir" in lowered_query:
+                workflow_type = "renewal_expiration_awareness"
+                required_agents = ["contract", "action"]
+            elif "draft me an email" in lowered_query or "reach out to the cpo" in lowered_query or "draft me email" in lowered_query:
+                workflow_type = "executive_outreach"
+                required_agents = ["contract", "action"]
+            else:
+                workflow_type = intent_data.get("workflow_type", "contract_analysis")
+                required_agents = ["contract", "research", "action"]
             
             # Extract partner name if available
             partner_name = intent_data.get('partner_name')
@@ -202,54 +225,40 @@ class SupervisoryAgent:
             print(f"Partner Name: {partner_name or 'To be extracted from contract'}")
             
             return {
-                "workflow_stage": "initialized",
+                "workflow_stage": workflow_type,
                 "required_agents": required_agents,
                 "partner_name": partner_name,
-                "messages": [f"Workflow initialized: {', '.join(required_agents)} agents required"]
+                "messages": [f"Workflow initialized: {workflow_type} using {', '.join(required_agents)}"]
             }
         
         def execute_contract_agent_node(state: SupervisoryState) -> dict:
-            """Execute Contract Agent to ingest and analyze contract"""
-            contract_file_path = state.get("contract_file_path")
-            
-            if not contract_file_path:
-                return {
-                    "contract_summary": {"error": "No contract file path provided"},
-                    "messages": ["Contract Agent skipped - no file path"]
-                }
-            
+            """Execute Contract Agent as a portfolio-wide pre-step across all partner contracts"""
+            partner_name = state.get("partner_name") or "Confluent"
+
             print(f"\n{'='*80}")
             print("EXECUTING CONTRACT AGENT")
             print(f"{'='*80}")
-            print(f"Processing: {contract_file_path}")
-            
+            print(f"Preloading contract portfolio for partner: {partner_name}")
+            print("Contract scope: all files in docs/ beginning with Confluent_IBM")
+
             try:
-                # Run Contract Agent
-                result = self.contract_agent.run(contract_file_path)
-                
+                discovered_paths = self.contract_agent.discover_partner_contracts(partner_name)
+
+                result = self.contract_agent.run_portfolio(
+                    partner_name=partner_name,
+                    contract_paths=discovered_paths
+                )
+
                 print("\nContract Agent completed successfully")
-                print(f"Document length: {len(result.get('raw_text', ''))} characters")
-                
-                # Extract partner name from contract if not already set
-                partner_name = state.get("partner_name")
-                if not partner_name and result.get("structured_summary"):
-                    structured = result["structured_summary"]
-                    if isinstance(structured, dict) and "parties" in structured:
-                        parties = structured["parties"]
-                        if isinstance(parties, list) and len(parties) > 0:
-                            # Use the first party that's not "Confluent"
-                            for party in parties:
-                                if "Confluent" not in party:
-                                    partner_name = party
-                                    break
-                
+                print(f"Contracts processed: {len(result.get('contract_paths', []))}")
+
                 return {
                     "contract_summary": result,
                     "partner_name": partner_name,
                     "workflow_stage": "contract_complete",
-                    "messages": ["Contract Agent executed successfully"]
+                    "messages": ["Contract portfolio preloaded successfully"]
                 }
-            
+
             except Exception as e:
                 print(f"\nContract Agent error: {str(e)}")
                 return {
@@ -309,8 +318,15 @@ class SupervisoryAgent:
             """Execute Action Agent to determine next best action"""
             contract_summary = state.get("contract_summary", {})
             partner_profile = state.get("partner_profile", {})
+            required_agents = state.get("required_agents", [])
             
-            if not contract_summary or not partner_profile:
+            if not contract_summary:
+                return {
+                    "action_recommendation": {"error": "Missing contract context"},
+                    "messages": ["Action Agent skipped - missing contract context"]
+                }
+
+            if "research" in required_agents and not partner_profile:
                 return {
                     "action_recommendation": {"error": "Missing required context"},
                     "messages": ["Action Agent skipped - insufficient context"]
@@ -322,7 +338,7 @@ class SupervisoryAgent:
             
             try:
                 # Run Action Agent
-                result = self.action_agent.run(contract_summary, partner_profile)
+                result = self.action_agent.run(contract_summary, partner_profile or {"partner_name": state.get("partner_name", "Confluent")}, state.get("seller_query", ""))
                 
                 print("\nAction Agent completed successfully")
                 risk_level = result.get("risk_assessment", {}).get("risk_level", "Unknown")
@@ -420,15 +436,31 @@ class SupervisoryAgent:
                     ""
                 ])
             
+            portfolio_summary = contract_summary.get("portfolio_summary", {})
+            if portfolio_summary:
+                output_parts.extend([
+                    "=" * 80,
+                    "CONTRACT PORTFOLIO OVERVIEW",
+                    "=" * 80,
+                    "",
+                    f"Total Contracts: {portfolio_summary.get('total_contracts', 0)}",
+                    f"Renewal Candidates: {len(portfolio_summary.get('renewal_candidates', []))}",
+                    f"Recently Expired: {len(portfolio_summary.get('recently_expired_contracts', []))}",
+                    ""
+                ])
+                for step in portfolio_summary.get("recommended_next_steps", []):
+                    output_parts.append(f"- {step}")
+                output_parts.append("")
+
             output_parts.extend([
                 "=" * 80,
                 "WORKFLOW COMPLETE",
                 "=" * 80,
                 "",
-                "✓ Contract analyzed and ingested",
-                "✓ Partner research completed",
-                "✓ Next best action determined",
-                "✓ Artifacts created (CRM update, draft email)",
+                "Contract portfolio analyzed and ingested",
+                "Partner research completed",
+                "Next best action determined",
+                "Artifacts created (CRM update, draft email)",
                 "",
                 "Seller can now execute the recommended action directly from this tool.",
                 "=" * 80
@@ -466,30 +498,30 @@ class SupervisoryAgent:
     def run(
         self,
         seller_query: str,
-        contract_file_path: str,
+        contract_file_path: Optional[str] = None,
         partner_name: Optional[str] = None
     ) -> dict:
         """
         Run the complete supervisory workflow.
-        
+
         Args:
             seller_query: Natural language query from seller
-            contract_file_path: Path to contract document
+            contract_file_path: Optional legacy contract path; portfolio workflow uses all docs/Confluent_IBM*.docx
             partner_name: Optional partner name (will be extracted if not provided)
-            
+
         Returns:
             Final state with complete workflow results
         """
         if self.graph is None:
             self.build_agent()
-        
+
         initial_state = {
             "seller_query": seller_query,
             "contract_file_path": contract_file_path,
             "partner_name": partner_name,
             "messages": []
         }
-        
+
         result = self.graph.invoke(initial_state)
         return result
 

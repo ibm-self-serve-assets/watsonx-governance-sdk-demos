@@ -42,6 +42,25 @@ class ResearchState(TypedDict):
 # Internal Sales Data Tools
 # ============================================================================
 
+def _load_sales_df() -> pd.DataFrame:
+    excel_path = Path("docs/Confluent Sales Cloud Infor.xlsx")
+    if not excel_path.exists():
+        raise FileNotFoundError("Sales data file not found")
+
+    df = pd.read_excel(excel_path, sheet_name="Sheet1", header=0)
+    if all('Unnamed' in str(col) for col in df.columns):
+        df.columns = df.iloc[0]
+        df = df[1:].reset_index(drop=True)
+
+    if pd.isna(df.columns[0]) or str(df.columns[0]).strip() == '':
+        df = df.iloc[:, 1:]
+
+    df.columns = df.columns.str.strip()
+    print(f"DEBUG - Final column names: {df.columns.tolist()}")
+    print(f"DEBUG - First few rows:\n{df.head(2)}")
+    return df
+
+
 @tool
 def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner company"]) -> dict:
     """
@@ -49,56 +68,26 @@ def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner com
     Returns prior opportunities, stage history, previous follow-ups, and known stakeholders.
     """
     try:
-        # Read the Excel file
-        excel_path = Path("docs/Confluent Sales Cloud Infor.xlsx")
-        if not excel_path.exists():
-            return {"error": "Sales data file not found"}
-        
-        # Read Excel with header in first row (row 0)
-        df = pd.read_excel(excel_path, sheet_name="Sheet1", header=0)
-        
-        # The first row contains the actual headers, but they might be in the data
-        # Check if all columns are unnamed
-        if all('Unnamed' in str(col) for col in df.columns):
-            # Use the first row as headers
-            df.columns = df.iloc[0]
-            df = df[1:].reset_index(drop=True)
-        
-        # Drop the first column if it's empty/unnamed
-        if pd.isna(df.columns[0]) or str(df.columns[0]).strip() == '':
-            df = df.iloc[:, 1:]
-        
-        # Clean column names (remove leading/trailing whitespace and tabs)
-        df.columns = df.columns.str.strip()
-        
-        print(f"DEBUG - Final column names: {df.columns.tolist()}")
-        print(f"DEBUG - First few rows:\n{df.head(2)}")
-        
-        # Filter opportunities related to the partner
-        # Search across multiple columns: Opportunity Name, Next Steps, Products
+        df = _load_sales_df()
+
         mask = (
-            df['Opportunity Name'].str.contains(partner_name, case=False, na=False) |
-            df['Next Steps'].str.contains(partner_name, case=False, na=False) |
-            df['Products'].str.contains(partner_name, case=False, na=False)
+            df['Opportunity Name'].astype(str).str.contains(partner_name, case=False, na=False) |
+            df['Next Steps'].astype(str).str.contains(partner_name, case=False, na=False) |
+            df['Products'].astype(str).str.contains(partner_name, case=False, na=False)
         )
         partner_data = df[mask]
-        
-        # If still no results, try searching for "Confluent" + partner name pattern
-        # This handles cases where opportunities are named "Confluent [Product]" but relate to a partner
+
         if partner_data.empty and partner_name.lower() != 'confluent':
-            # Look for any row that might be related to this partner
-            # Check if any column contains the partner name
             mask = df.apply(lambda row: row.astype(str).str.contains(partner_name, case=False, na=False).any(), axis=1)
             partner_data = df[mask]
-        
+
         if partner_data.empty:
             return {
                 "partner_name": partner_name,
                 "found": False,
                 "message": f"No sales history found for {partner_name}"
             }
-        
-        # Extract key information
+
         opportunities = []
         for _, row in partner_data.iterrows():
             opp = {
@@ -111,27 +100,23 @@ def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner com
                 "next_steps": row['Next Steps']
             }
             opportunities.append(opp)
-        
-        # Calculate metrics
+
         total_opportunities = len(opportunities)
         won_deals = [o for o in opportunities if o['stage'] == 'Won']
         lost_deals = [o for o in opportunities if o['stage'] == 'Lost']
         active_deals = [o for o in opportunities if o['stage'] not in ['Won', 'Lost']]
-        
+
         total_won_amount = sum(o['amount'] for o in won_deals if isinstance(o['amount'], (int, float)))
         total_active_amount = sum(o['amount'] for o in active_deals if isinstance(o['amount'], (int, float)))
-        
-        # Extract unique stakeholders
+
         stakeholders = list(set(o['owner'] for o in opportunities))
-        
-        # Extract products used
+
         products_used = set()
         for opp in opportunities:
             if pd.notna(opp['products']):
                 products = [p.strip() for p in str(opp['products']).split(',')]
                 products_used.update(products)
-        
-        # Identify deal blockers from lost deals
+
         deal_blockers = []
         for opp in lost_deals:
             if pd.notna(opp['next_steps']):
@@ -139,7 +124,7 @@ def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner com
                     "opportunity": opp['opportunity_name'],
                     "reason": opp['next_steps']
                 })
-        
+
         return {
             "partner_name": partner_name,
             "found": True,
@@ -158,9 +143,50 @@ def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner com
             "deal_blockers": deal_blockers,
             "sales_velocity": "High" if len(won_deals) >= 3 else "Medium" if len(won_deals) >= 1 else "Low"
         }
-        
+
     except Exception as e:
         return {"error": f"Error retrieving sales history: {str(e)}"}
+
+
+@tool
+def get_recent_and_upcoming_contract_actions(partner_name: Annotated[str, "Name of the partner company"]) -> dict:
+    """
+    Summarize CRM opportunities that suggest renewals, expirations, follow-ups, and product-specific actions.
+    """
+    try:
+        df = _load_sales_df()
+        mask = df['Opportunity Name'].astype(str).str.contains(partner_name, case=False, na=False)
+        partner_data = df[mask] if partner_name.lower() != "confluent" else df[df['Opportunity Name'].astype(str).str.contains("Confluent", case=False, na=False)]
+
+        action_flags = []
+        for _, row in partner_data.iterrows():
+            opp_name = str(row.get('Opportunity Name', ''))
+            next_steps = str(row.get('Next Steps', ''))
+            products = str(row.get('Products', ''))
+            close_date = str(row.get('Close Date', ''))
+
+            if "renew" in next_steps.lower() or "renew" in opp_name.lower():
+                action_flags.append({
+                    "opportunity_name": opp_name,
+                    "close_date": close_date,
+                    "action_type": "renewal",
+                    "recommended_action": f"Prepare renewal outreach for {opp_name}"
+                })
+
+            if "cognos" in products.lower() or "cognos" in opp_name.lower():
+                action_flags.append({
+                    "opportunity_name": opp_name,
+                    "close_date": close_date,
+                    "action_type": "cognos_review",
+                    "recommended_action": f"Meet with the account before renewal because Cognos is in the renewal scope for {opp_name}"
+                })
+
+        return {
+            "partner_name": partner_name,
+            "action_flags": action_flags
+        }
+    except Exception as e:
+        return {"error": f"Error retrieving renewal actions: {str(e)}"}
 
 
 @tool
@@ -247,13 +273,15 @@ def research_internal_node(state: ResearchState) -> dict:
     
     # Retrieve sales history
     sales_data = retrieve_sales_history.invoke({"partner_name": partner_name})
-    
+
     # Analyze maturity
     maturity_data = analyze_partner_maturity.invoke({"sales_data": sales_data})
-    
+    renewal_actions = get_recent_and_upcoming_contract_actions.invoke({"partner_name": partner_name})
+
     internal_data = {
         "sales_history": sales_data,
-        "maturity_analysis": maturity_data
+        "maturity_analysis": maturity_data,
+        "renewal_actions": renewal_actions
     }
     
     return {"internal_data": internal_data}

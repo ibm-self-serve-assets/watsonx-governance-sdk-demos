@@ -21,6 +21,7 @@ python-dotenv>=1.0.0
 # Jupyter notebook support
 jupyter>=1.0.0
 ipykernel>=6.0.0
+PyPDF2
 
 # Optional: For enhanced OCR capabilities
 # pytesseract>=0.3.10
