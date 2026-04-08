@@ -559,4 +559,3 @@ if __name__ == "__main__":
     # Display final result
     print("\n" + result["final_result"])
 
-# Made with Bob

@@ -65,7 +65,7 @@ def demo_workflow_1():
         print("  - WATSONX_APIKEY")
         print("  - WATSONX_PROJECT_ID")
         print("  - TAVILY_API_KEY (for web search)")
-        print("\nYou can set them in a .env file or export them in your shell.")
+        print("\nSet them in a .env file or export them in the shell.")
         return
     
     # Check if contract file exists
@@ -194,7 +194,7 @@ def interactive_demo():
     
     # Get user input
     print("\n" + "-" * 80)
-    seller_query = input("Enter your query (or press Enter for default): ").strip()
+    seller_query = input("Enter query (or press Enter for default): ").strip()
     if not seller_query:
         seller_query = "I just received a signed ESA. What should I do next?"
     
@@ -281,4 +281,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Made with Bob

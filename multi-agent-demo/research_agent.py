@@ -96,6 +96,7 @@ def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner com
                 "stage": row['Stage'],
                 "amount": row['Amount'],
                 "close_date": str(row['Close Date']),
+                "contract_expiration_date": str(row.get('Contract Expiration Date', 'N/A')),
                 "products": row['Products'],
                 "next_steps": row['Next Steps']
             }
@@ -263,6 +264,41 @@ def search_technology_alignment(
     return results
 
 
+@tool
+def search_pre_acquisition_executives(partner_name: Annotated[str, "Name of the partner company"]) -> str:
+    """
+    Search for pre-IBM acquisition executive information: CPO, CTO, CEO names.
+    This is critical for understanding who to contact at the partner company.
+    """
+    tavily = TavilySearch(max_results=5)
+    query = f"{partner_name} CPO CTO CEO executives leadership team before IBM acquisition"
+    results = tavily.invoke(query)
+    return results
+
+
+@tool
+def search_revenue_and_growth(partner_name: Annotated[str, "Name of the partner company"]) -> str:
+    """
+    Search for revenue data and growth trends before IBM acquisition.
+    Focuses on recent financial performance and year-over-year changes.
+    """
+    tavily = TavilySearch(max_results=5)
+    query = f"{partner_name} revenue 2024 2025 financial performance growth before IBM acquisition"
+    results = tavily.invoke(query)
+    return results
+
+
+@tool
+def search_key_announcements(partner_name: Annotated[str, "Name of the partner company"]) -> str:
+    """
+    Search for key public releases, product announcements, and strategic initiatives.
+    """
+    tavily = TavilySearch(max_results=5)
+    query = f"{partner_name} recent announcements product releases strategic initiatives 2024 2025"
+    results = tavily.invoke(query)
+    return results
+
+
 # ============================================================================
 # Agent Nodes
 # ============================================================================
@@ -288,12 +324,21 @@ def research_internal_node(state: ResearchState) -> dict:
 
 
 def research_external_node(state: ResearchState) -> dict:
-    """Node to retrieve external context via web search."""
+    """Node to retrieve external context via web search with pre-acquisition executive data."""
     partner_name = state["partner_name"]
     internal_data = state.get("internal_data", {})
     
     # Get partner background
     background = search_partner_background.invoke({"partner_name": partner_name})
+    
+    # Get pre-acquisition executive information (CPO, CTO, CEO)
+    executives = search_pre_acquisition_executives.invoke({"partner_name": partner_name})
+    
+    # Get revenue and growth data
+    revenue_data = search_revenue_and_growth.invoke({"partner_name": partner_name})
+    
+    # Get key announcements and releases
+    announcements = search_key_announcements.invoke({"partner_name": partner_name})
     
     # Get technology alignment if we have product data
     tech_alignment = None
@@ -307,6 +352,9 @@ def research_external_node(state: ResearchState) -> dict:
     
     external_data = {
         "background": background,
+        "executives": executives,
+        "revenue_data": revenue_data,
+        "announcements": announcements,
         "technology_alignment": tech_alignment
     }
     

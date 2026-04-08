@@ -242,36 +242,36 @@ print(result["final_output"])
 ## Key Features
 
 ### Contract Agent
-- ✅ Multi-format support (DOCX, PDF, Excel, TXT)
-- ✅ OCR and text extraction
-- ✅ Metadata extraction and normalization
-- ✅ Vector database ingestion (Chroma)
-- ✅ Semantic search capabilities
-- ✅ Read-only file access
+- Multi-format support (DOCX, PDF, Excel, TXT)
+- OCR and text extraction
+- Metadata extraction and normalization
+- Vector database ingestion (Chroma)
+- Semantic search capabilities
+- Read-only file access
 
 ### Research Agent
-- ✅ Internal CRM data retrieval (Excel)
-- ✅ Partner maturity analysis
-- ✅ Sales velocity calculation
-- ✅ Deal blocker identification
-- ✅ External web research (Tavily)
-- ✅ Technology alignment assessment
-- ✅ Comprehensive partner profile synthesis
+- Internal CRM data retrieval (Excel)
+- Partner maturity analysis
+- Sales velocity calculation
+- Deal blocker identification
+- External web research (Tavily)
+- Technology alignment assessment
+- Comprehensive partner profile synthesis
 
 ### Action Agent
-- ✅ Historical pattern analysis
-- ✅ Risk assessment (0-100 score)
-- ✅ Next best action determination
-- ✅ CRM update generation
-- ✅ Draft email creation
-- ✅ Success criteria definition
+- Historical pattern analysis
+- Risk assessment (0-100 score)
+- Next best action determination
+- CRM update generation
+- Draft email creation
+- Success criteria definition
 
 ### Supervisory Agent
-- ✅ Natural language intent interpretation
-- ✅ Multi-agent orchestration
-- ✅ Context aggregation
-- ✅ Error handling and recovery
-- ✅ Comprehensive result synthesis
+- Natural language intent interpretation
+- Multi-agent orchestration
+- Context aggregation
+- Error handling and recovery
+- Comprehensive result synthesis
 
 ## Output Example
 

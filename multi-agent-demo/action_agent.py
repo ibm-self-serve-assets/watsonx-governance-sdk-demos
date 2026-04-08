@@ -420,64 +420,81 @@ class ActionAgent:
             partner_profile = state.get("partner_profile", {})
             recommended_action = state.get("recommended_action", {})
             risk_assessment = state.get("risk_assessment", {})
+            seller_query = state.get("seller_query", "")
 
             partner_name = partner_profile.get("partner_name", "Partner")
             portfolio = contract_summary.get("portfolio_summary", {})
             ranked_next_steps = recommended_action.get("ranked_next_steps", [])
             top_step = ranked_next_steps[0] if ranked_next_steps else "Review contract portfolio and schedule follow-up."
+            
+            # Get potential products from contract summary
+            potential_products = []
+            if portfolio.get("active_contracts"):
+                # Extract products from active contracts
+                for contract in portfolio.get("active_contracts", [])[:3]:
+                    filename = contract.get("file_name", "")
+                    if filename:
+                        potential_products.append(filename.replace("_", " ").replace(".docx", ""))
+            
+            # Also check partner profile for products used
+            if partner_profile.get("internal_data", {}).get("sales_history", {}).get("products_used"):
+                potential_products.extend(partner_profile["internal_data"]["sales_history"]["products_used"][:3])
+            
+            # Remove duplicates and limit
+            potential_products = list(dict.fromkeys(potential_products))[:5]
+            products_str = ", ".join(potential_products) if potential_products else "Portfolio Review"
 
             crm_updates = {
-                "opportunity_name": f"{partner_name} - Contract Portfolio Review",
-                "stage": "Renewal / Expansion Review",
+                "opportunity_name": f"{partner_name} - Seller Inquiry {datetime.now().strftime('%Y-%m-%d')}",
+                "stage": "Seller Inquiry",
                 "next_step": top_step,
                 "owner": "IBM Seller",
                 "due_date": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
                 "priority": risk_assessment.get("risk_level", "Medium"),
                 "contracts_reviewed": len(portfolio.get("contract_paths", [])),
                 "agent_next_steps": ranked_next_steps,
+                "seller_query": seller_query,
+                "potential_products": products_str,
                 "updated_timestamp": datetime.now().isoformat()
             }
 
             try:
                 df = self._load_crm_data()
                 if not df.empty:
+                    # Ensure Agent Next Steps column exists
                     if "Agent Next Steps" not in df.columns:
                         df["Agent Next Steps"] = ""
 
                     agent_next_steps_text = " | ".join(ranked_next_steps[:5])
+                    
+                    # ALWAYS create a new row for each seller inquiry
+                    new_row = {col: "" for col in df.columns}
+                    
+                    # Populate the new row with seller inquiry data
+                    if "Opportunity Name" in df.columns:
+                        new_row["Opportunity Name"] = crm_updates["opportunity_name"]
+                    if "Owner Full Name" in df.columns:
+                        new_row["Owner Full Name"] = crm_updates["owner"]
+                    if "Stage" in df.columns:
+                        new_row["Stage"] = crm_updates["stage"]
+                    if "Amount" in df.columns:
+                        new_row["Amount"] = ""  # Leave blank for seller inquiry
+                    if "Close Date" in df.columns:
+                        new_row["Close Date"] = crm_updates["due_date"]
+                    if "Next Steps" in df.columns:
+                        new_row["Next Steps"] = crm_updates["next_step"]
+                    if "Products" in df.columns:
+                        new_row["Products"] = products_str
+                    if "Agent Next Steps" in df.columns:
+                        new_row["Agent Next Steps"] = agent_next_steps_text
 
-                    partner_mask = (
-                        df["Opportunity Name"].astype(str).str.contains(partner_name, case=False, na=False)
-                        if "Opportunity Name" in df.columns
-                        else pd.Series([False] * len(df))
-                    )
+                    # Add the new row to the dataframe
+                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
 
-                    if partner_mask.any():
-                        df.loc[partner_mask, "Agent Next Steps"] = agent_next_steps_text
-
-                        if "Next Steps" in df.columns:
-                            df.loc[partner_mask, "Next Steps"] = top_step
-                    else:
-                        new_row = {col: "" for col in df.columns}
-                        if "Opportunity Name" in df.columns:
-                            new_row["Opportunity Name"] = crm_updates["opportunity_name"]
-                        if "Owner Full Name" in df.columns:
-                            new_row["Owner Full Name"] = crm_updates["owner"]
-                        if "Stage" in df.columns:
-                            new_row["Stage"] = crm_updates["stage"]
-                        if "Close Date" in df.columns:
-                            new_row["Close Date"] = crm_updates["due_date"]
-                        if "Next Steps" in df.columns:
-                            new_row["Next Steps"] = crm_updates["next_step"]
-                        if "Products" in df.columns:
-                            new_row["Products"] = "Portfolio Review"
-                        if "Agent Next Steps" in df.columns:
-                            new_row["Agent Next Steps"] = agent_next_steps_text
-
-                        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-
+                    # Save the updated dataframe
                     df.to_excel(self.crm_file_path, sheet_name="Sheet1", index=False)
                     crm_updates["crm_file_updated"] = True
+                    crm_updates["new_row_added"] = True
                 else:
                     crm_updates["crm_file_updated"] = False
             except Exception as e:
@@ -661,4 +678,3 @@ if __name__ == "__main__":
     
     print(result["final_output"])
 
-# Made with Bob

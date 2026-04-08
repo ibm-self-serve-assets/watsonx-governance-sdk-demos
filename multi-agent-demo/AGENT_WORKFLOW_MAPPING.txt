@@ -1,0 +1,262 @@
+AGENT WORKFLOW MAPPING
+How the Current Implementation Maps to Your Example Workflow
+
+================================================================================
+
+YOUR EXAMPLE WORKFLOW vs CURRENT IMPLEMENTATION
+
+================================================================================
+
+1. CONTRACT AGENT (contract_agent.py)
+   
+   Your Example: "Contract Agent Returns: Cognos is expiring on 5/31/2026..."
+   
+   Current Implementation: YES - This is handled by Contract Agent
+   - Reads all Confluent_IBM-*.docx files
+   - Extracts expiration dates, amounts, products
+   - Identifies expired contracts (like the 1/31/2026 watsonx)
+   - Returns portfolio summary with renewal candidates
+   
+   Function: contract_node(state)
+   Output: Contract metadata, expiration dates, amounts, products
+
+================================================================================
+
+2. CRM AGENT
+   
+   Your Example: "CRM Agent: Reads the opportunity name, owner and next steps"
+   
+   Current Implementation: PARTIALLY - This is handled by Research Agent
+   - Research Agent has _read_crm_data() function
+   - Reads "Confluent Sales Cloud Infor.xlsx"
+   - Extracts: Opportunity Name, Owner Full Name, Stage, Amount, Close Date, Products, Next Steps
+   
+   Function: research_agent._read_crm_data(partner_name)
+   Output: CRM opportunities with owners and next steps
+   
+   NOTE: There is NO separate "CRM Agent" - this functionality is inside Research Agent
+
+================================================================================
+
+3. MATCHING AGENT (matching_agent.py)
+   
+   Your Example: "Maybe we need another agent that matches the information from the contracts to the CRM information"
+   
+   Current Implementation: YES - This is the Matching Agent you created!
+   - Matches contracts to CRM opportunities
+   - Identifies which contracts have corresponding CRM entries
+   - Finds gaps (contracts without CRM entries, CRM entries without contracts)
+   
+   Function: matching_node(state)
+   Output: Matched pairs, unmatched contracts, unmatched opportunities
+   
+   Example Output:
+   - "Cognos contract ($1M) matches CRM opportunity 'Confluent Cognos' (Kylie Brittz)"
+   - "watsonx contract ($250K expired) matches CRM opportunity 'Confluent watsonx ESA' (Anand Das)"
+
+================================================================================
+
+4. RESEARCH AGENT (research_agent.py)
+   
+   Your Example: "Research Agent: Gets Confluents CPO was Shaun Clowes, CTO was Stephen Deasy, CEO was Jay Kreps"
+   
+   Current Implementation: YES - This is handled by Research Agent
+   - search_pre_acquisition_executives(): Finds CPO, CTO, CEO names before IBM acquisition
+   - search_revenue_and_growth(): Gets revenue data ($1.167B in 2025)
+   - search_key_announcements(): Finds product launches and partnerships
+   - _read_crm_data(): Reads CRM Excel file
+   
+   Functions: 
+   - search_pre_acquisition_executives(partner_name)
+   - search_revenue_and_growth(partner_name)
+   - search_key_announcements(partner_name)
+   - research_external_node(state) - combines all research
+   
+   Output: Partner profile with executives, revenue, deal history
+
+================================================================================
+
+5. SUMMARY AGENT
+   
+   Your Example: "Supervisor Agent calls summary agent; Summary agent returns: We can see there are 3 key contracts..."
+   
+   Current Implementation: NO SEPARATE SUMMARY AGENT
+   
+   This functionality is DISTRIBUTED across:
+   
+   a) Action Agent (_rank_next_steps function):
+      - Creates prioritized list of next steps
+      - Combines contract + CRM + research data
+      - Generates recommendations
+   
+   b) Action Agent (_draft_email function):
+      - Summarizes the situation in email format
+      - References specific contracts and next steps
+   
+   c) Supervisory Agent (run function):
+      - Assembles final result with all agent outputs
+      - Creates "final_result" summary text
+   
+   RECOMMENDATION: Could create a dedicated Summary Agent that:
+   - Takes outputs from Contract, Research, and Matching agents
+   - Creates the narrative summary you showed
+   - Formats it in a conversational way
+   - Currently this logic is embedded in Action Agent
+
+================================================================================
+
+6. ACTION AGENT (action_agent.py)
+   
+   Your Example: "Action Agent responds: Great, in that case your next steps are..."
+   
+   Current Implementation: YES - This is the Action Agent
+   - Determines next best actions
+   - Drafts emails to CPO
+   - Updates CRM Excel file
+   - Creates prioritized action list
+   
+   Functions:
+   - _draft_email(): Creates email to CPO
+   - _update_crm(): Writes to Excel file
+   - _rank_next_steps(): Creates action list
+   - action_node(state): Main orchestration
+   
+   Output: Email draft, CRM update, recommended actions
+
+================================================================================
+
+WHAT'S MISSING FROM CURRENT IMPLEMENTATION
+
+1. CONVERSATIONAL FOLLOW-UP
+   Your Example: Seller says "I have reached out to them..."
+   Current: NOT IMPLEMENTED - No conversational state management
+   
+   To Add: Would need to maintain conversation history and context
+
+2. DEDICATED SUMMARY AGENT
+   Your Example: "Summary agent returns: We can see there are 3 key contracts..."
+   Current: Summary logic is embedded in Action Agent
+   
+   To Add: Could create summary_agent.py that:
+   - Takes all agent outputs
+   - Creates narrative summary
+   - Formats in conversational style
+
+3. INTERACTIVE CRM UPDATES
+   Your Example: "Action Agent: updated Next steps on line 12..."
+   Current: Only adds NEW rows to CRM, doesn't update existing rows
+   
+   To Add: Would need _update_existing_crm_row() function
+
+4. MULTI-TURN DIALOGUE
+   Your Example: Multiple back-and-forth exchanges
+   Current: Single query → single response
+   
+   To Add: Would need conversation state management
+
+================================================================================
+
+CURRENT WORKFLOW EXECUTION
+
+Step 1: Seller Query
+"I'm a new seller at IBM. I recently got Confluent as a new customer..."
+
+Step 2: Supervisory Agent
+- Coordinates all agents
+- Determines which agents to call
+
+Step 3: Contract Agent
+- Reads all Confluent_IBM-*.docx files
+- Returns: "1 expired (watsonx-1/31/2026), 2 active, 1 renewal coming"
+
+Step 4: Research Agent
+- Searches web for executives (CPO, CTO, CEO)
+- Searches for revenue data
+- Reads CRM Excel file
+- Returns: Partner profile with all data
+
+Step 5: Matching Agent
+- Matches contracts to CRM opportunities
+- Returns: "2 matched, 2 unmatched"
+
+Step 6: Action Agent
+- Determines scenario (renewal_expiration_awareness)
+- Creates prioritized action list
+- Drafts email to CPO
+- Updates CRM with new row
+- Returns: Complete action package
+
+Step 7: Supervisory Agent
+- Assembles all outputs
+- Returns final result to seller
+
+================================================================================
+
+MAPPING YOUR EXAMPLE TO CURRENT CODE
+
+Your Workflow Step                  Current Implementation
+--------------------------------------------------------------------------------
+"Contract Agent Returns"            contract_agent.contract_node()
+"CRM Agent Reads"                   research_agent._read_crm_data()
+"Matching Agent"                    matching_agent.matching_node()
+"Research Agent Gets CPO"           research_agent.search_pre_acquisition_executives()
+"Summary Agent Returns"             action_agent._rank_next_steps() + supervisory_agent.run()
+"Action Agent Drafts Email"         action_agent._draft_email()
+"Action Agent Updates CRM"          action_agent._update_crm()
+
+================================================================================
+
+KEY DIFFERENCES
+
+1. NO SEPARATE CRM AGENT
+   - CRM reading is inside Research Agent
+   - Function: research_agent._read_crm_data()
+
+2. NO SEPARATE SUMMARY AGENT
+   - Summary logic is in Action Agent and Supervisory Agent
+   - Could be extracted into dedicated agent
+
+3. NO CONVERSATIONAL STATE
+   - Current: One query → one response
+   - Your example: Multiple turns with context
+
+4. CRM UPDATES ARE ADDITIVE ONLY
+   - Current: Adds new rows to Excel
+   - Your example: Updates existing rows
+
+================================================================================
+
+RECOMMENDATION FOR ALIGNMENT
+
+To match your example workflow exactly, you would need to:
+
+1. Create summary_agent.py
+   - Takes outputs from all agents
+   - Creates narrative summary
+   - Formats conversationally
+
+2. Add conversation state management
+   - Track dialogue history
+   - Maintain context across turns
+   - Enable follow-up questions
+
+3. Enhance CRM update functionality
+   - Add ability to update existing rows
+   - Not just add new rows
+
+4. Consider renaming/restructuring
+   - Extract CRM reading from Research Agent
+   - Create dedicated crm_agent.py if desired
+   - Or keep as-is (it works, just organized differently)
+
+================================================================================
+
+BOTTOM LINE
+
+Your example workflow CAN be executed with current implementation, but:
+- CRM reading is in Research Agent (not separate CRM Agent)
+- Summary is created by Action Agent (not separate Summary Agent)
+- No conversational follow-up (single query/response only)
+- CRM updates add rows (don't update existing rows)
+
+The core functionality is there, just organized slightly differently than your example shows.
