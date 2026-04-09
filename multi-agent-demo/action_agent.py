@@ -357,7 +357,15 @@ class ActionAgent:
                 return structured.get("amount") if isinstance(structured, dict) else "Unknown"
             
             def extract_products(contract):
-                """Extract product names from contract filename"""
+                """Extract product names from contract structured data or filename"""
+                # First try to get products from structured_summary (already extracted by contract agent)
+                structured = contract.get("structured_summary", {})
+                if isinstance(structured, dict):
+                    products = structured.get("products", [])
+                    if products and products != ["Unknown"]:
+                        return products
+                
+                # Fallback: parse from filename if structured data unavailable
                 fn = contract.get("file_name", "").lower()
                 products = []
                 if "cognos" in fn:
@@ -367,9 +375,13 @@ class ActionAgent:
                         products.append("watsonx Orchestrate")
                     if "governance" in fn:
                         products.append("watsonx.governance")
+                    if "data" in fn:
+                        products.append("watsonx.data")
                     if "ai" in fn or not products:
                         products.append("watsonx.ai" if "ai" in fn else "watsonx ESA")
-                return products or ["Unknown Product"]
+                
+                # Return products or indicate they need to be extracted
+                return products if products else ["Products not yet extracted - run cache_contracts.py"]
             
             def extract_executive_info(partner_profile, role):
                 """
@@ -875,55 +887,60 @@ class ActionAgent:
             crm_updates = {
                 "opportunity_name": f"{partner_name} - Seller Inquiry {datetime.now().strftime('%Y-%m-%d')}",
                 "stage": "Seller Inquiry",
-                "next_step": top_step,
+                "next_step": top_step,  # Single top priority action
                 "owner": "IBM Seller",
                 "due_date": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
                 "priority": risk_assessment.get("risk_level", "Medium"),
                 "contracts_reviewed": len(portfolio.get("contract_paths", [])),
-                "next_steps": ranked_next_steps,
+                # Removed duplicate "next_steps" list - keeping only "next_step" (singular)
                 "seller_query": seller_query,
                 "potential_products": products_str,
                 "updated_timestamp": datetime.now().isoformat()
             }
 
-            try:
-                df = self._load_crm_data()
-                if not df.empty:
-                    # Create full next steps text with all recommendations
-                    agent_next_steps_text = " | ".join(ranked_next_steps[:5])
-                    
-                    # ALWAYS create a new row for each seller inquiry
-                    new_row = {col: "" for col in df.columns}
-                    
-                    # Populate the new row with seller inquiry data
-                    if "Opportunity Name" in df.columns:
-                        new_row["Opportunity Name"] = crm_updates["opportunity_name"]
-                    if "Owner Full Name" in df.columns:
-                        new_row["Owner Full Name"] = crm_updates["owner"]
-                    if "Stage" in df.columns:
-                        new_row["Stage"] = crm_updates["stage"]
-                    if "Amount" in df.columns:
-                        new_row["Amount"] = ""  # Leave blank for seller inquiry
-                    if "Close Date" in df.columns:
-                        new_row["Close Date"] = crm_updates["due_date"]
-                    if "Next Steps" in df.columns:
-                        # Put full agent recommendations in Next Steps column
-                        new_row["Next Steps"] = agent_next_steps_text
-                    if "Products" in df.columns:
-                        new_row["Products"] = products_str
-
-                    # Add the new row to the dataframe
-                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-
-                    # Save the updated dataframe
-                    df.to_excel(self.crm_file_path, sheet_name="Sheet1", index=False)
-                    crm_updates["crm_file_updated"] = True
-                    crm_updates["new_row_added"] = True
-                else:
-                    crm_updates["crm_file_updated"] = False
-            except Exception as e:
-                crm_updates["crm_file_updated"] = False
-                crm_updates["crm_update_error"] = str(e)
+            # CRM UPDATE DISABLED - Uncomment below to re-enable
+            # try:
+            #     df = self._load_crm_data()
+            #     if not df.empty:
+            #         # Create full next steps text with all recommendations
+            #         agent_next_steps_text = " | ".join(ranked_next_steps[:5])
+            #
+            #         # ALWAYS create a new row for each seller inquiry
+            #         new_row = {col: "" for col in df.columns}
+            #
+            #         # Populate the new row with seller inquiry data
+            #         if "Opportunity Name" in df.columns:
+            #             new_row["Opportunity Name"] = crm_updates["opportunity_name"]
+            #         if "Owner Full Name" in df.columns:
+            #             new_row["Owner Full Name"] = crm_updates["owner"]
+            #         if "Stage" in df.columns:
+            #             new_row["Stage"] = crm_updates["stage"]
+            #         if "Amount" in df.columns:
+            #             new_row["Amount"] = ""  # Leave blank for seller inquiry
+            #         if "Close Date" in df.columns:
+            #             new_row["Close Date"] = crm_updates["due_date"]
+            #         if "Next Steps" in df.columns:
+            #             # Put full agent recommendations in Next Steps column
+            #             new_row["Next Steps"] = agent_next_steps_text
+            #         if "Products" in df.columns:
+            #             new_row["Products"] = products_str
+            #
+            #         # Add the new row to the dataframe
+            #         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            #
+            #         # Save the updated dataframe
+            #         df.to_excel(self.crm_file_path, sheet_name="Sheet1", index=False)
+            #         crm_updates["crm_file_updated"] = True
+            #         crm_updates["new_row_added"] = True
+            #     else:
+            #         crm_updates["crm_file_updated"] = False
+            # except Exception as e:
+            #     crm_updates["crm_file_updated"] = False
+            #     crm_updates["crm_update_error"] = str(e)
+            
+            # Mark as disabled
+            crm_updates["crm_file_updated"] = False
+            crm_updates["crm_update_disabled"] = True
 
             # Enhanced email generation with detailed context and extracted executive info
             recipient_info = {"role": "CPO", "name": None, "title": "CPO"}
