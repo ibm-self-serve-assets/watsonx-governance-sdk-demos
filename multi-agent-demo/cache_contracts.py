@@ -1,19 +1,23 @@
 """
 Cache Contract Processing Results with Rate Limiting
 
-This script processes contracts in batches with delays to avoid Watsonx rate limits.
-It saves progress incrementally so you don't lose work if rate limits are hit.
+This script:
+1. Extracts text from contracts (no LLM)
+2. Uses regex to extract structured fields (amount, products, dates)
+3. Caches everything so you don't re-process
 
 Usage:
-    python cache_contracts.py
+    python cache_contracts.py                    # Process and cache all contracts
+    python cache_contracts.py --load             # View cached data
+    python cache_contracts.py --text-only        # Extract text only (no structured fields)
 """
 
 import os
 import json
 import time
+import re
 from datetime import datetime
 from dotenv import load_dotenv
-from contract_agent import ContractAgent
 from docx import Document
 import PyPDF2
 from tqdm import tqdm
@@ -23,7 +27,7 @@ load_dotenv()
 CACHE_FILE = "contracts_cache.json"
 PROGRESS_FILE = "contracts_progress.json"
 BATCH_SIZE = 1  # Process 1 contract at a time
-DELAY_BETWEEN_CONTRACTS = 15  # Wait 15 seconds between contracts
+DELAY_BETWEEN_CONTRACTS = 15  # Wait 15 seconds between LLM calls
 
 
 def extract_text_from_docx(file_path):
@@ -51,6 +55,65 @@ def extract_text_from_pdf(file_path):
         return None
 
 
+def extract_structured_fields(text):
+    """
+    Extract structured fields from contract text using regex (no LLM).
+    This is a fast fallback that works without API calls.
+    """
+    structured = {}
+    
+    # Extract amount - look for "committed order value of $X"
+    amount_match = re.search(r'committed order value of \$[\d,]+\.?\d*', text, re.IGNORECASE)
+    if amount_match:
+        structured['amount'] = amount_match.group(0).split('of ')[-1]
+    else:
+        # Fallback: find any dollar amount
+        amount_match = re.search(r'\$[\d,]+\.?\d*', text)
+        structured['amount'] = amount_match.group(0) if amount_match else "Not specified"
+    
+    # Extract products
+    products = []
+    if "watsonx" in text.lower():
+        if "orchestrate" in text.lower():
+            products.append("watsonx Orchestrate")
+        if "governance" in text.lower():
+            products.append("watsonx.governance")
+        if "watsonx as a service" in text.lower() or "watsonx.ai" in text.lower():
+            products.append("watsonx as a Service")
+        if not products:
+            products.append("watsonx ESA")
+    if "cognos" in text.lower():
+        products.append("Cognos")
+    structured['products'] = products if products else ["Not specified"]
+    
+    # Extract dates
+    effective_date_match = re.search(r'effective as (\w+ \d{1,2}, \d{4})', text, re.IGNORECASE)
+    structured['start_date'] = effective_date_match.group(1) if effective_date_match else "Not specified"
+    
+    # Extract term length
+    term_match = re.search(r'term of this TD will be (\w+) \((\d+)\) years? from the Effective Date', text, re.IGNORECASE)
+    if term_match:
+        term_years = term_match.group(2)
+        structured['term_length'] = f"{term_years} year(s)"
+        structured['end_date'] = f"{term_years} year(s) from effective date"
+    else:
+        structured['term_length'] = "Not specified"
+        structured['end_date'] = "Not specified"
+    
+    # Extract parties
+    parties = []
+    if "confluent" in text.lower():
+        parties.append("Confluent")
+    if "ibm" in text.lower():
+        parties.append("IBM")
+    structured['parties'] = parties if parties else ["Not specified"]
+    
+    # Contract type
+    structured['contract_type'] = "ESA" if "ESA" in text else "Sales Agreement"
+    
+    return structured
+
+
 def save_progress(processed_contracts):
     """Save progress incrementally"""
     progress_data = {
@@ -71,14 +134,24 @@ def load_progress():
     return []
 
 
-def process_contracts_batch(partner_name="Confluent"):
-    """Process contracts in batches with rate limiting"""
+def process_contracts_batch(partner_name="Confluent", text_only=False):
+    """
+    Process contracts in batches.
+    
+    Args:
+        partner_name: Partner to process contracts for
+        text_only: If True, only extract text (no structured fields)
+    """
     
     print(f"\n{'='*80}")
-    print("CONTRACT TEXT EXTRACTION (No LLM calls)")
+    if text_only:
+        print("CONTRACT TEXT EXTRACTION (No LLM)")
+    else:
+        print("CONTRACT PROCESSING (Text + Structured Fields)")
     print(f"{'='*80}")
     print(f"Partner: {partner_name}")
-    print(f"Processing: 1 contract at a time with 15 second delays")
+    if not text_only:
+        print(f"Extracting: Text + Amount + Products + Dates")
     print(f"{'='*80}\n")
     
     # Find contract files
@@ -124,8 +197,16 @@ def process_contracts_batch(partner_name="Confluent"):
                     "text_length": len(text),
                     "processed_at": datetime.now().isoformat()
                 }
+                
+                # Extract structured fields if not text-only mode
+                if not text_only:
+                    structured = extract_structured_fields(text)
+                    contract_data["structured_summary"] = structured
+                    pbar.set_postfix({"amount": structured.get('amount', 'N/A')})
+                else:
+                    pbar.set_postfix({"chars": f"{len(text):,}"})
+                
                 processed_contracts.append(contract_data)
-                pbar.set_postfix({"chars": f"{len(text):,}"})
                 
                 # Save progress after each contract
                 save_progress(processed_contracts)
@@ -182,10 +263,11 @@ def load_cached_contracts():
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Extract and cache contract text")
+    parser = argparse.ArgumentParser(description="Extract and cache contract data")
     parser.add_argument("--partner", default="Confluent", help="Partner name")
     parser.add_argument("--load", action="store_true", help="Load and display cache")
     parser.add_argument("--force", action="store_true", help="Force re-process (delete progress)")
+    parser.add_argument("--text-only", action="store_true", help="Extract text only (no structured fields)")
     
     args = parser.parse_args()
     
@@ -197,6 +279,9 @@ def main():
             print(f"Contracts: {data['total_contracts']}")
             for contract in data['contracts']:
                 print(f"  - {contract['file_name']}: {contract['text_length']:,} chars")
+                if 'structured_summary' in contract:
+                    print(f"    Amount: {contract['structured_summary'].get('amount', 'N/A')}")
+                    print(f"    Products: {', '.join(contract['structured_summary'].get('products', []))}")
         return
     
     if args.force and os.path.exists(PROGRESS_FILE):
@@ -204,7 +289,7 @@ def main():
         print("✓ Deleted progress file - starting fresh")
     
     try:
-        process_contracts_batch(partner_name=args.partner)
+        process_contracts_batch(partner_name=args.partner, text_only=args.text_only)
         
         print(f"\n{'='*80}")
         print("USAGE IN YOUR CODE")
@@ -217,6 +302,8 @@ def main():
         print("for contract in data['contracts']:")
         print("    print(f\"{contract['file_name']}: {contract['text_length']} chars\")")
         print("    text = contract['extracted_text']")
+        print("    if 'structured_summary' in contract:")
+        print("        print(f\"Amount: {contract['structured_summary']['amount']}\")")
         print("```")
         
     except KeyboardInterrupt:
@@ -232,3 +319,4 @@ def main():
 if __name__ == "__main__":
     main()
 
+# Made with Bob

@@ -241,10 +241,11 @@ def analyze_partner_maturity(sales_data: Annotated[dict, "Sales history data for
 @tool
 def search_partner_background(partner_name: Annotated[str, "Name of the partner company"]) -> str:
     """
-    Search for partner company background, recent announcements, and market signals using Tavily.
+    Search for partner company background, announcements, and market signals using Tavily.
+    IMPORTANT: Focuses on information BEFORE IBM acquisition.
     """
     tavily = TavilySearch(max_results=5)
-    query = f"{partner_name} company background recent news technology partnerships"
+    query = f"{partner_name} company background news technology partnerships BEFORE IBM acquisition pre-acquisition independent"
     results = tavily.invoke(query)
     return results
 
@@ -267,11 +268,26 @@ def search_technology_alignment(
 @tool
 def search_pre_acquisition_executives(partner_name: Annotated[str, "Name of the partner company"]) -> str:
     """
-    Search for pre-IBM acquisition executive information: CPO, CTO, CEO names.
+    Search for key decision-makers and executives at the partner company prior to IBM acquisition.
+    Finds people a seller would want to contact: CPO, CTO, CEO, VP Procurement, VP Engineering, etc.
     This is critical for understanding who to contact at the partner company.
+    IMPORTANT: Searches for executives AT the partner company, not IBM executives.
     """
-    tavily = TavilySearch(max_results=5)
-    query = f"{partner_name} CPO CTO CEO executives leadership team before IBM acquisition"
+    tavily = TavilySearch(max_results=8)
+    
+    # Search for multiple key roles that sellers would contact
+    query = (
+        f"{partner_name} company leadership team executives "
+        f"CPO \"Chief Procurement Officer\" "
+        f"CTO \"Chief Technology Officer\" "
+        f"CEO \"Chief Executive Officer\" "
+        f"CFO \"Chief Financial Officer\" "
+        f"\"VP Procurement\" \"VP Engineering\" \"VP Technology\" "
+        f"\"Head of Procurement\" \"Head of Technology\" "
+        f"prior to IBM acquisition 2024 2025 "
+        f"-IBM -\"Arvind Krishna\" -\"IBM executives\""
+    )
+    
     results = tavily.invoke(query)
     return results
 
@@ -279,11 +295,11 @@ def search_pre_acquisition_executives(partner_name: Annotated[str, "Name of the 
 @tool
 def search_revenue_and_growth(partner_name: Annotated[str, "Name of the partner company"]) -> str:
     """
-    Search for revenue data and growth trends before IBM acquisition.
-    Focuses on recent financial performance and year-over-year changes.
+    Search for revenue data and growth trends prior to IBM acquisition.
+    Focuses on financial performance before the acquisition.
     """
     tavily = TavilySearch(max_results=5)
-    query = f"{partner_name} revenue 2024 2025 financial performance growth before IBM acquisition"
+    query = f"{partner_name} revenue financial performance growth 2024 2025 prior to the IBM acquisition"
     results = tavily.invoke(query)
     return results
 
@@ -291,10 +307,10 @@ def search_revenue_and_growth(partner_name: Annotated[str, "Name of the partner 
 @tool
 def search_key_announcements(partner_name: Annotated[str, "Name of the partner company"]) -> str:
     """
-    Search for key public releases, product announcements, and strategic initiatives.
+    Search for key public releases, product announcements, and strategic initiatives prior to IBM acquisition.
     """
     tavily = TavilySearch(max_results=5)
-    query = f"{partner_name} recent announcements product releases strategic initiatives 2024 2025"
+    query = f"{partner_name} announcements product releases strategic initiatives 2024 2025 prior to the IBM acquisition"
     results = tavily.invoke(query)
     return results
 

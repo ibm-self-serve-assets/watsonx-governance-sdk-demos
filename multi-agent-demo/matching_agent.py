@@ -99,13 +99,155 @@ class MatchingAgent:
         
         return "Unknown"
     
+    def _match_with_llm(
+        self,
+        contract: dict,
+        opportunities: List[dict]
+    ) -> tuple[List[dict], str, str]:
+        """
+        Use LLM to intelligently match a contract to CRM opportunities.
+        
+        Returns:
+            Tuple of (matching_opportunities, confidence_level, reasoning)
+        """
+        # Extract contract details
+        filename = contract.get("file_name", "")
+        structured_summary = contract.get("structured_summary", {})
+        
+        products_list = structured_summary.get("products", [])
+        product = ", ".join(products_list) if products_list and products_list != ["Not specified"] else self._extract_product_from_filename(filename)
+        contract_amount = structured_summary.get("amount", "Not specified")
+        start_date = structured_summary.get("start_date", "Unknown")
+        end_date = structured_summary.get("end_date") or contract.get("end_date", "Unknown")
+        
+        # Format contract info for LLM
+        contract_info = f"""
+Contract File: {filename}
+Products: {product}
+Amount: {contract_amount}
+Start Date: {start_date}
+End Date: {end_date}
+Status: {contract.get("status", "unknown")}
+"""
+        
+        # Format opportunities for LLM
+        opp_info = "\n\n".join([
+            f"""Opportunity {i+1}:
+Name: {opp.get('opportunity_name', 'Unknown')}
+Owner: {opp.get('owner', 'Unknown')}
+Products: {opp.get('products', 'Unknown')}
+Amount: ${opp.get('amount', 0):,.0f}
+Stage: {opp.get('stage', 'Unknown')}
+Next Steps: {opp.get('next_steps', 'None')}"""
+            for i, opp in enumerate(opportunities)
+        ])
+        
+        # Create LLM for matching
+        llm = WatsonxLLM(
+            model_id=self.model_id,
+            url=self.url,
+            apikey=self.apikey,
+            project_id=self.project_id,
+            params={
+                "max_new_tokens": 500,
+                "temperature": 0.1,
+                "decoding_method": "greedy"
+            }
+        )
+        
+        # Matching prompt
+        prompt = f"""You are a contract-CRM matching expert. Analyze this contract and determine which CRM opportunities (if any) are related to it.
+
+CONTRACT INFORMATION:
+{contract_info}
+
+CRM OPPORTUNITIES:
+{opp_info}
+
+MATCHING CRITERIA:
+1. Product/service alignment (e.g., "watsonx ESA" matches "watsonx as a Service", "Cognos" matches "Cognos Analytics")
+2. Dollar amount proximity (within reasonable range)
+3. Timeline alignment (contract dates vs opportunity close dates)
+4. Semantic relationships (understand product families and variations)
+
+Provide your analysis in this EXACT format:
+
+MATCHED_OPPORTUNITIES: [comma-separated list of opportunity numbers that match, or "NONE"]
+CONFIDENCE: [high/medium/low]
+REASONING: [Brief explanation of why these opportunities match or don't match]
+
+Be thorough - consider semantic relationships, not just exact string matches."""
+
+        try:
+            response = llm.invoke(prompt)
+            
+            # Parse LLM response
+            matched_indices = []
+            confidence = "low"
+            reasoning = "Unable to parse LLM response"
+            
+            lines = response.strip().split('\n')
+            for line in lines:
+                if line.startswith("MATCHED_OPPORTUNITIES:"):
+                    matched_str = line.split(":", 1)[1].strip()
+                    if matched_str.upper() != "NONE":
+                        # Extract numbers
+                        import re
+                        numbers = re.findall(r'\d+', matched_str)
+                        matched_indices = [int(n) - 1 for n in numbers if 0 <= int(n) - 1 < len(opportunities)]
+                elif line.startswith("CONFIDENCE:"):
+                    confidence = line.split(":", 1)[1].strip().lower()
+                elif line.startswith("REASONING:"):
+                    reasoning = line.split(":", 1)[1].strip()
+            
+            # Get matched opportunities
+            matching_opps = [opportunities[i] for i in matched_indices]
+            
+            print(f"\nLLM Matching for {filename}:")
+            print(f"  Matched: {len(matching_opps)} opportunities")
+            print(f"  Confidence: {confidence}")
+            print(f"  Reasoning: {reasoning[:100]}...")
+            
+            return matching_opps, confidence, reasoning
+            
+        except Exception as e:
+            print(f"LLM matching error: {e}")
+            # Fallback to simple string matching
+            return self._fallback_string_match(contract, opportunities)
+    
+    def _fallback_string_match(
+        self,
+        contract: dict,
+        opportunities: List[dict]
+    ) -> tuple[List[dict], str, str]:
+        """Fallback to simple string matching if LLM fails"""
+        filename = contract.get("file_name", "")
+        structured_summary = contract.get("structured_summary", {})
+        
+        products_list = structured_summary.get("products", [])
+        product = ", ".join(products_list) if products_list and products_list != ["Not specified"] else self._extract_product_from_filename(filename)
+        
+        matching_opps = []
+        for opp in opportunities:
+            opp_name = opp.get("opportunity_name", "").lower()
+            opp_products = str(opp.get("products", "")).lower()
+            product_lower = product.lower()
+            
+            if product_lower in opp_name or product_lower in opp_products:
+                matching_opps.append(opp)
+        
+        confidence = "high" if len(matching_opps) == 1 else "medium" if matching_opps else "low"
+        reasoning = f"String match on product '{product}'"
+        
+        return matching_opps, confidence, reasoning
+    
     def _match_contracts_to_opportunities(
         self,
         contracts: List[dict],
         opportunities: List[dict]
     ) -> tuple[List[dict], List[dict]]:
         """
-        Match contracts to CRM opportunities based on product names, amounts, and dates.
+        Match contracts to CRM opportunities using LLM-based intelligent matching.
         
         Returns:
             Tuple of (matched_contracts, unmatched_contracts)
@@ -115,37 +257,53 @@ class MatchingAgent:
         
         for contract in contracts:
             filename = contract.get("file_name", "")
-            product = self._extract_product_from_filename(filename)
-            contract_amount = contract.get("structured_summary", {}).get("amount")
-            end_date = contract.get("end_date", "Unknown")
+            structured_summary = contract.get("structured_summary", {})
+            
+            # Get product info
+            products_list = structured_summary.get("products", [])
+            product = ", ".join(products_list) if products_list and products_list != ["Not specified"] else self._extract_product_from_filename(filename)
+            
+            # Extract all contract details
+            contract_amount = structured_summary.get("amount", "Not specified")
+            start_date = structured_summary.get("start_date", "Unknown")
+            end_date = structured_summary.get("end_date") or contract.get("end_date", "Unknown")
+            term_length = structured_summary.get("term_length", "Unknown")
             status = contract.get("status", "unknown")
             
-            # Find matching opportunities
-            matching_opps = []
-            for opp in opportunities:
-                opp_name = opp.get("opportunity_name", "").lower()
-                opp_products = str(opp.get("products", "")).lower()
-                
-                # Check if product matches
-                if product.lower() in opp_name or product.lower() in opp_products:
-                    matching_opps.append(opp)
+            # Use LLM to find matching opportunities
+            matching_opps, confidence, reasoning = self._match_with_llm(contract, opportunities)
             
             if matching_opps:
                 matched.append({
                     "contract": contract,
-                    "product": product,
+                    "contract_file": filename,
+                    "contract_product": product,
+                    "contract_value": contract_amount,
+                    "contract_start": start_date,
+                    "contract_end": end_date,
+                    "contract_term": term_length,
+                    "contract_status": status,
                     "opportunities": matching_opps,
-                    "status": status,
-                    "end_date": end_date,
-                    "match_confidence": "high" if len(matching_opps) == 1 else "medium"
+                    "match_confidence": confidence,
+                    "match_reasoning": reasoning,
+                    # Add CRM details from first matching opportunity
+                    "crm_opportunity": matching_opps[0].get("opportunity_name", "Unknown"),
+                    "crm_owner": matching_opps[0].get("owner", "Unknown"),
+                    "crm_stage": matching_opps[0].get("stage", "Unknown"),
+                    "crm_amount": matching_opps[0].get("amount", "Unknown"),
+                    "crm_close_date": matching_opps[0].get("close_date", "Unknown"),
+                    "crm_next_steps": matching_opps[0].get("next_steps", "None")
                 })
             else:
                 unmatched.append({
                     "contract": contract,
-                    "product": product,
-                    "status": status,
-                    "end_date": end_date,
-                    "reason": "No matching CRM opportunity found"
+                    "contract_file": filename,
+                    "contract_product": product,
+                    "contract_value": contract_amount,
+                    "contract_start": start_date,
+                    "contract_end": end_date,
+                    "contract_status": status,
+                    "reason": f"No matching CRM opportunity found. {reasoning}"
                 })
         
         return matched, unmatched
@@ -158,24 +316,41 @@ class MatchingAgent:
             portfolio = state.get("contract_portfolio", {})
             opportunities = state.get("crm_opportunities", [])
             
+            print(f"\nDEBUG - Matching Agent:")
+            print(f"  Portfolio keys: {list(portfolio.keys())}")
+            print(f"  Opportunities count: {len(opportunities)}")
+            
             # Get contracts from portfolio
             portfolio_summary = portfolio.get("portfolio_summary", {})
             all_contracts = []
             
             # Include active contracts
-            all_contracts.extend(portfolio_summary.get("active_contracts", []))
+            active = portfolio_summary.get("active_contracts", [])
+            print(f"  Active contracts: {len(active)}")
+            all_contracts.extend(active)
             
             # Include renewal candidates
-            all_contracts.extend(portfolio_summary.get("renewal_candidates", []))
+            renewal = portfolio_summary.get("renewal_candidates", [])
+            print(f"  Renewal candidates: {len(renewal)}")
+            all_contracts.extend(renewal)
             
             # Include recently expired
-            all_contracts.extend(portfolio_summary.get("recently_expired_contracts", []))
+            expired = portfolio_summary.get("recently_expired_contracts", [])
+            print(f"  Recently expired: {len(expired)}")
+            all_contracts.extend(expired)
+            
+            print(f"  Total contracts to match: {len(all_contracts)}")
+            
+            if all_contracts and len(all_contracts) > 0:
+                print(f"  Sample contract keys: {list(all_contracts[0].keys())}")
             
             # Perform matching
             matched, unmatched = self._match_contracts_to_opportunities(
                 all_contracts,
                 opportunities
             )
+            
+            print(f"  Matching complete: {len(matched)} matched, {len(unmatched)} unmatched")
             
             return {
                 "matched_contracts": matched,
@@ -206,10 +381,12 @@ class MatchingAgent:
                 
                 for match in matched:
                     contract = match["contract"]
-                    product = match["product"]
+                    product = match.get("contract_product", "Unknown")
                     opportunities = match["opportunities"]
-                    end_date = match["end_date"]
-                    status = match["status"]
+                    end_date = match.get("contract_end", "Unknown")
+                    status = match.get("contract_status", "unknown")
+                    confidence = match.get("match_confidence", "unknown")
+                    reasoning = match.get("match_reasoning", "No reasoning provided")
                     
                     output_parts.extend([
                         "",
@@ -217,6 +394,8 @@ class MatchingAgent:
                         f"Contract: {contract.get('file_name', 'Unknown')}",
                         f"Status: {status}",
                         f"End Date: {end_date}",
+                        f"Match Confidence: {confidence}",
+                        f"Match Reasoning: {reasoning[:100]}..." if len(reasoning) > 100 else f"Match Reasoning: {reasoning}",
                         f"Matching Opportunities: {len(opportunities)}"
                     ])
                     
@@ -240,11 +419,11 @@ class MatchingAgent:
                     contract = item["contract"]
                     output_parts.extend([
                         "",
-                        f"Product: {item['product']}",
+                        f"Product: {item.get('contract_product', 'Unknown')}",
                         f"Contract: {contract.get('file_name', 'Unknown')}",
-                        f"Status: {item['status']}",
-                        f"End Date: {item['end_date']}",
-                        f"Reason: {item['reason']}"
+                        f"Status: {item.get('contract_status', 'unknown')}",
+                        f"End Date: {item.get('contract_end', 'Unknown')}",
+                        f"Reason: {item.get('reason', 'No reason provided')}"
                     ])
             
             output_parts.extend([

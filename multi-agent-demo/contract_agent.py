@@ -110,6 +110,38 @@ class ContractAgent:
             raise ValueError("WATSONX_APIKEY must be provided or set in environment variables")
         if not self.project_id:
             raise ValueError("WATSONX_PROJECT_ID must be provided or set in environment variables")
+    def _load_cache(self):
+        """Load contract cache from JSON file"""
+        cache_file = "contracts_cache.json"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                    return cache_data.get('contracts', [])
+            except Exception as e:
+                print(f"Warning: Could not load cache: {e}")
+                return []
+        return []
+    
+    def _get_cached_contract(self, file_path: str):
+        """
+        Get cached contract data if available.
+        
+        Args:
+            file_path: Path to contract file
+            
+        Returns:
+            Cached contract data dict or None if not found
+        """
+        cache = self._load_cache()
+        file_name = os.path.basename(file_path)
+        
+        for contract in cache:
+            if contract.get('file_name') == file_name or contract.get('file_path') == file_path:
+                return contract
+        
+        return None
+    
         
     def _initialize_vector_store(self):
         """Initialize or load the vector store"""
@@ -234,17 +266,29 @@ class ContractAgent:
         """Build the LangGraph for contract processing"""
         
         def read_document_node(state: ContractState) -> dict:
-            """Read document from file path (read-only access)"""
+            """Read document from file path - checks cache first"""
+            file_path = state['file_path']
+            
+            # Check cache first
+            cached = self._get_cached_contract(file_path)
+            if cached:
+                print(f"✓ Using cached data for: {os.path.basename(file_path)}")
+                return {
+                    "raw_text": cached.get('extracted_text'),
+                    "messages": [f"Loaded from cache: {len(cached.get('extracted_text', ''))} characters"]
+                }
+            
+            # Not in cache - read from file
             try:
-                print(f"DEBUG: Reading document from: {state['file_path']}")
-                raw_text = self._read_document(state["file_path"])
+                print(f"DEBUG: Reading document from: {file_path}")
+                raw_text = self._read_document(file_path)
                 print(f"DEBUG: Extracted {len(raw_text) if raw_text else 0} characters")
                 
                 if not raw_text or len(raw_text.strip()) == 0:
                     print(f"DEBUG: Document appears empty!")
                     return {
                         "raw_text": None,
-                        "messages": [f"Warning: Document appears empty or could not extract text from {state['file_path']}"]
+                        "messages": [f"Warning: Document appears empty or could not extract text from {file_path}"]
                     }
                 
                 print(f"DEBUG: Returning raw_text with {len(raw_text)} characters")
@@ -263,7 +307,25 @@ class ContractAgent:
                 }
         
         def extract_metadata_node(state: ContractState) -> dict:
-            """Extract and normalize contract metadata using LLM with rule-based fallback"""
+            """Extract and normalize contract metadata using LLM with rule-based fallback - checks cache first"""
+            
+            # Check cache first to avoid LLM call
+            file_path = state.get("file_path")
+            if file_path:
+                cached = self._get_cached_contract(file_path)
+                if cached and 'structured_summary' in cached:
+                    print(f"✓ Using cached metadata for: {os.path.basename(file_path)}")
+                    # Create metadata structure from cached data
+                    metadata = {
+                        "raw_extraction": f"CACHED DATA - {cached['structured_summary']}",
+                        "file_path": file_path,
+                        "extraction_timestamp": cached.get('processed_at', datetime.now().isoformat()),
+                        "document_length": cached.get('text_length', 0)
+                    }
+                    return {
+                        "contract_metadata": metadata,
+                        "messages": ["Loaded metadata from cache (no LLM call)"]
+                    }
             
             if not state["raw_text"]:
                 return {
@@ -346,7 +408,18 @@ class ContractAgent:
             }
         
         def normalize_and_structure_node(state: ContractState) -> dict:
-            """Normalize extracted data and create structured summary with fallback"""
+            """Normalize extracted data and create structured summary - checks cache first"""
+            
+            # Check if we have cached structured data
+            file_path = state.get("file_path")
+            if file_path:
+                cached = self._get_cached_contract(file_path)
+                if cached and 'structured_summary' in cached:
+                    print(f"✓ Using cached structured data for: {os.path.basename(file_path)}")
+                    return {
+                        "structured_summary": cached['structured_summary'],
+                        "messages": ["Loaded structured data from cache"]
+                    }
             
             if not state["contract_metadata"]:
                 return {
@@ -357,16 +430,23 @@ class ContractAgent:
             raw_extraction = state["contract_metadata"]["raw_extraction"]
             
             normalize_prompt = ChatPromptTemplate.from_template(
-                "Based on this extracted contract metadata:\n\n"
+                "Based on this extracted contract metadata and the full contract text:\n\n"
                 "{metadata}\n\n"
+                "FULL CONTRACT TEXT (first 5000 chars):\n{contract_text}\n\n"
                 "Create a structured JSON summary with these fields:\n"
                 "- parties: array of party names\n"
                 "- effective_date: normalized date (YYYY-MM-DD format if possible)\n"
-                "- term_length: normalized duration\n"
+                "- end_date: contract end/expiration date (YYYY-MM-DD format if possible)\n"
+                "- start_date: contract start date (YYYY-MM-DD format if possible)\n"
+                "- term_length: normalized duration (e.g., '1 year', '2 years')\n"
+                "- amount: total contract value with currency (e.g., '$500,092.80')\n"
+                "- products: array of specific products/services mentioned (e.g., ['watsonx as a Service', 'watsonx Orchestrate', 'watsonx.governance'])\n"
                 "- key_obligations: array of main obligations\n"
                 "- milestones: array of key milestones\n"
-                "- contract_type: inferred type (e.g., 'Sales Agreement', 'Service Contract')\n"
+                "- contract_type: inferred type (e.g., 'Sales Agreement', 'Service Contract', 'ESA')\n"
                 "- risk_level: assessed risk level (Low/Medium/High)\n\n"
+                "IMPORTANT: Extract the EXACT dollar amount, product names, and dates from the contract text.\n"
+                "Look for phrases like 'committed order value', 'Purchase Commitment', 'Cloud Services', 'watsonx', 'Effective Date', 'term of this TD'.\n\n"
                 "Provide ONLY valid JSON, no additional text."
             )
             
@@ -383,7 +463,8 @@ class ContractAgent:
                 )
                 
                 formatted_prompt = normalize_prompt.invoke({
-                    "metadata": raw_extraction
+                    "metadata": raw_extraction,
+                    "contract_text": (state.get("raw_text") or "")[:5000]  # First 5000 chars for context
                 })
                 result = llm.invoke(formatted_prompt)
                 structured_data = result.content if hasattr(result, "content") else str(result)
@@ -430,13 +511,46 @@ class ContractAgent:
                 if "cognos" in raw_extraction.lower():
                     risk_level = "Medium"
 
+                # Enhanced fallback extraction from raw text
+                raw_text = state.get("raw_text") or ""
+                
+                # Extract amount
+                amount_match = re.search(r'\$[\d,]+\.?\d*', raw_text)
+                amount = amount_match.group(0) if amount_match else "Not specified"
+                
+                # Extract products
+                products = []
+                if "watsonx" in raw_text.lower():
+                    if "orchestrate" in raw_text.lower():
+                        products.append("watsonx Orchestrate")
+                    if "governance" in raw_text.lower():
+                        products.append("watsonx.governance")
+                    if "watsonx as a service" in raw_text.lower() or "watsonx.ai" in raw_text.lower():
+                        products.append("watsonx as a Service")
+                    if not products:  # Generic watsonx if no specific product found
+                        products.append("watsonx ESA")
+                if "cognos" in raw_text.lower():
+                    products.append("Cognos")
+                
+                # Extract end date
+                end_date_match = re.search(r'term of this TD will be (\w+) \((\d+)\) years? from the Effective Date', raw_text)
+                if end_date_match:
+                    term_years = end_date_match.group(2)
+                    end_date = f"{term_years} year(s) from effective date"
+                else:
+                    end_date = "Not specified"
+                
                 structured_summary = {
                     "parties": parties or ["IBM", "Confluent"],
                     "effective_date": effective_date,
-                    "term_length": "Not specified",
+                    "end_date": end_date,
+                    "start_date": effective_date,
+                    "term_length": f"{term_years} year(s)" if end_date_match else "Not specified",
+                    "amount": amount,
+                    "products": products if products else ["Not specified"],
                     "key_obligations": ["renewal review", "contract management"] if "renewal" in raw_extraction.lower() else ["contract management"],
                     "milestones": [],
-                    "contract_type": "Sales Agreement",
+                    "contract_type": "ESA" if "ESA" in raw_text else "Sales Agreement",
                     "risk_level": risk_level,
                     "fallback_reason": str(e)
                 }
@@ -642,21 +756,52 @@ class ContractAgent:
             structured = result.get("structured_summary") or {}
             metadata = result.get("contract_metadata") or {}
 
-            effective_date_raw = structured.get("effective_date")
+            effective_date_raw = structured.get("effective_date") or structured.get("start_date")
             effective_date = None
             if effective_date_raw and isinstance(effective_date_raw, str):
                 try:
                     effective_date = datetime.fromisoformat(effective_date_raw).date()
                 except ValueError:
-                    effective_date = None
+                    # Try parsing common date formats
+                    for fmt in ["%m/%d/%Y", "%Y-%m-%d", "%b %d, %Y", "%B %d, %Y"]:
+                        try:
+                            effective_date = datetime.strptime(effective_date_raw, fmt).date()
+                            break
+                        except ValueError:
+                            continue
 
             filename = Path(contract_path).name
+            
+            # Try to get end_date from structured data first
+            end_date_raw = structured.get("end_date")
             derived_end_date = None
-            if effective_date:
+            
+            if end_date_raw and isinstance(end_date_raw, str):
+                # Try parsing the end_date
                 try:
-                    derived_end_date = effective_date.replace(year=effective_date.year + 1)
+                    derived_end_date = datetime.fromisoformat(end_date_raw).date()
                 except ValueError:
-                    derived_end_date = None
+                    # Try parsing common date formats
+                    for fmt in ["%m/%d/%Y", "%Y-%m-%d", "%b %d, %Y", "%B %d, %Y"]:
+                        try:
+                            derived_end_date = datetime.strptime(end_date_raw, fmt).date()
+                            break
+                        except ValueError:
+                            continue
+            
+            # Fallback: if no end_date but have effective_date and term_length, calculate it
+            if not derived_end_date and effective_date:
+                term_length = structured.get("term_length", "")
+                if "year" in str(term_length).lower():
+                    # Extract number of years
+                    import re
+                    years_match = re.search(r'(\d+)', str(term_length))
+                    if years_match:
+                        years = int(years_match.group(1))
+                        try:
+                            derived_end_date = effective_date.replace(year=effective_date.year + years)
+                        except ValueError:
+                            derived_end_date = None
 
             obligations = structured.get("key_obligations", []) if isinstance(structured, dict) else []
             milestones = structured.get("milestones", []) if isinstance(structured, dict) else []
@@ -760,7 +905,7 @@ class ContractAgent:
             next_steps = [
                 "Review the active IBM-Confluent contract portfolio and confirm which agreements are currently enabled for sales activity.",
                 "Prioritize contracts with renewal dates or notice windows in the next 30-90 days.",
-                "Update the CRM Agent Next Steps column with the highest-priority seller actions for Confluent."
+                "Update the CRM Next Steps column with the highest-priority seller actions for Confluent."
             ]
 
         risk_level = "Low"

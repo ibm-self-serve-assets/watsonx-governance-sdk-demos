@@ -34,6 +34,7 @@ class ActionState(TypedDict):
     """State for Action Agent workflow"""
     contract_summary: dict  # From Contract Agent
     partner_profile: dict   # From Research Agent
+    matching_data: NotRequired[dict]  # NEW: From Matching Agent
     seller_query: NotRequired[str]
     messages: Annotated[list, operator.add]
     historical_patterns: NotRequired[dict]
@@ -267,6 +268,43 @@ class ActionAgent:
             "mitigation_required": risk_level in ["High", "Medium"]
         }
     
+    def _extract_first_email(self, text: str) -> str:
+        """
+        Extract only the first complete email from LLM output.
+        Handles cases where LLM generates multiple versions.
+        """
+        # If text is short or doesn't have duplicates, return as-is
+        if len(text) < 500:
+            return text.strip()
+        
+        # Find the first "Subject:" line
+        subject_idx = text.find("Subject:")
+        if subject_idx == -1:
+            # No subject found, return as-is
+            return text.strip()
+        
+        # Find the signature "IBM Seller"
+        signature_idx = text.find("IBM Seller", subject_idx)
+        if signature_idx == -1:
+            # No signature found, return everything from subject onwards
+            return text[subject_idx:].strip()
+        
+        # Look ahead to see if there's a duplicate email
+        end_idx = signature_idx + len("IBM Seller") + 50  # Add buffer for newlines
+        
+        # Check if there's another "Subject:" after this (indicating duplicate)
+        next_subject = text.find("Subject:", signature_idx + 10)
+        
+        if next_subject != -1 and next_subject < len(text) - 100:
+            # There's a duplicate - only take the first email
+            first_email = text[subject_idx:end_idx].strip()
+            print(f"DEBUG: Removed duplicate email (found second Subject at position {next_subject})")
+        else:
+            # No duplicate detected - return full text from subject onwards
+            first_email = text[subject_idx:].strip()
+        
+        return first_email
+    
     def build_agent(self):
         """Build the LangGraph for action determination"""
         
@@ -303,9 +341,10 @@ class ActionAgent:
             }
         
         def determine_action_node(state: ActionState) -> dict:
-            """Determine recommended next best action for workflows 3, 4, and 5"""
+            """Determine recommended next best action with detailed reasoning"""
             contract_summary = state.get("contract_summary", {})
             partner_profile = state.get("partner_profile", {})
+            matching_data = state.get("matching_data", {})  # NEW: Get from Matching Agent
             seller_query = state.get("seller_query", "")
             lowered_query = seller_query.lower()
 
@@ -314,108 +353,344 @@ class ActionAgent:
             renewal_candidates = portfolio.get("renewal_candidates", [])
             recently_expired = portfolio.get("recently_expired_contracts", [])
             portfolio_steps = portfolio.get("recommended_next_steps", [])
-            renewal_actions = partner_profile.get("internal_data", {}).get("renewal_actions", {}).get("action_flags", [])
-
+            
+            # Get matched contracts from Matching Agent (replaces manual matching)
+            matched_contracts = matching_data.get("matched_contracts", [])
+            unmatched_contracts = matching_data.get("unmatched_contracts", [])
+            
+            # Utility functions for contract analysis
+            def calculate_urgency(contract):
+                """Calculate urgency from contract end date"""
+                now, end_date_str = datetime.now().date(), contract.get("end_date", "Unknown")
+                if end_date_str == "Unknown":
+                    return None
+                try:
+                    days_diff = (datetime.fromisoformat(end_date_str).date() - now).days
+                    if days_diff < 0:
+                        return {"status": "EXPIRED", "days_expired": abs(days_diff), "days_until_expiration": None, "urgency_level": "CRITICAL"}
+                    elif days_diff <= 30:
+                        return {"status": "EXPIRING_SOON", "days_expired": None, "days_until_expiration": days_diff, "urgency_level": "HIGH"}
+                    elif days_diff <= 90:
+                        return {"status": "RENEWAL_WINDOW", "days_expired": None, "days_until_expiration": days_diff, "urgency_level": "MEDIUM"}
+                    return {"status": "ACTIVE", "days_expired": None, "days_until_expiration": days_diff, "urgency_level": "LOW"}
+                except:
+                    return None
+            
+            def extract_contract_value(contract):
+                """Extract contract value from structured summary"""
+                structured = contract.get("structured_summary", {})
+                return structured.get("amount") if isinstance(structured, dict) else "Unknown"
+            
+            def extract_products(contract):
+                """Extract product names from contract filename"""
+                fn = contract.get("file_name", "").lower()
+                products = []
+                if "cognos" in fn:
+                    products.append("Cognos")
+                if "watsonx" in fn:
+                    if "orchestrate" in fn:
+                        products.append("watsonx Orchestrate")
+                    if "governance" in fn:
+                        products.append("watsonx.governance")
+                    if "ai" in fn or not products:
+                        products.append("watsonx.ai" if "ai" in fn else "watsonx ESA")
+                return products or ["Unknown Product"]
+            
+            def extract_executive_info(partner_profile, role):
+                """Extract executive name from research data"""
+                import re
+                exec_data = partner_profile.get("external_data", {}).get("executives", "")
+                
+                # Ensure exec_data is a string (handle case where it might be a dict or other type)
+                if not isinstance(exec_data, str):
+                    exec_data = str(exec_data) if exec_data else ""
+                
+                patterns = {
+                    "CPO": [r'CPO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'Chief\s+Procurement\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CPO'],
+                    "CTO": [r'CTO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'Chief\s+Technology\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CTO'],
+                    "CEO": [r'CEO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'Chief\s+Executive\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CEO']
+                }
+                for pattern in patterns.get(role, []):
+                    if match := re.search(pattern, exec_data):
+                        return {"name": match.group(1), "title": role, "role": role}
+                return {"name": None, "title": role, "role": role}
+            
+            def find_matching_data_for_contract(contract, matched_contracts_list):
+                """Find the matching data for a specific contract from Matching Agent output"""
+                contract_filename = contract.get("file_name", "")
+                for match in matched_contracts_list:
+                    match_contract = match.get("contract", {})
+                    if match_contract.get("file_name") == contract_filename:
+                        # Return the first opportunity from the match
+                        opportunities = match.get("opportunities", [])
+                        return opportunities[0] if opportunities else None
+                return None
+            
+            def determine_recipient(contract, crm_match, query, partner_profile):
+                """Determine email recipient based on context"""
+                products = extract_products(contract)
+                if "cpo" in query.lower():
+                    role = "CPO"
+                elif "cto" in query.lower():
+                    role = "CTO"
+                elif "ceo" in query.lower():
+                    role = "CEO"
+                elif any(p in ["watsonx.ai", "watsonx.governance", "watsonx Orchestrate"] for p in products):
+                    role = "CTO"
+                elif crm_match and "renew" in str(crm_match.get("next_steps", "")).lower():
+                    role = "CPO"
+                elif (urgency := calculate_urgency(contract)) and urgency["urgency_level"] == "CRITICAL":
+                    role = "CEO"
+                else:
+                    role = "CPO"
+                return extract_executive_info(partner_profile, role)
+            
+            # Create detailed reasoning for each contract
+            detailed_actions = []
+            
+            # Process expired contracts first (highest priority)
+            for contract in recently_expired:
+                urgency = calculate_urgency(contract)
+                crm_match = find_matching_data_for_contract(contract, matched_contracts)
+                products = extract_products(contract)
+                value = extract_contract_value(contract)
+                recipient_info = determine_recipient(contract, crm_match, lowered_query, partner_profile)
+                
+                reasoning_parts = [
+                    f"CONTRACT: {contract.get('file_name', 'Unknown')}",
+                    f"- Product(s): {', '.join(products)}",
+                    f"- Value: {value}",
+                ]
+                
+                if urgency:
+                    reasoning_parts.append(f"- Status: {urgency['status']} ({urgency['days_expired']} days ago)")
+                    reasoning_parts.append(f"- End Date: {contract.get('end_date', 'Unknown')}")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("CRM LINKAGE:")
+                
+                if crm_match:
+                    reasoning_parts.extend([
+                        f"- Opportunity: \"{crm_match.get('opportunity_name', 'Unknown')}\"",
+                        f"- Owner: {crm_match.get('owner', 'Unknown')}",
+                        f"- Stage: {crm_match.get('stage', 'Unknown')}",
+                        f"- Amount: ${crm_match.get('amount', 0):,.0f}",
+                        f"- Close Date: {crm_match.get('close_date', 'Unknown')}",
+                        f"- Next Steps: \"{crm_match.get('next_steps', 'None')}\"",
+                    ])
+                else:
+                    reasoning_parts.append("- WARNING: No matching CRM opportunity found!")
+                    reasoning_parts.append("- ACTION REQUIRED: Create CRM opportunity to track renewal")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("URGENCY ANALYSIS:")
+                
+                if urgency and crm_match:
+                    urgency_reasons = []
+                    urgency_reasons.append(f"Contract expired {urgency['days_expired']} days ago")
+                    urgency_reasons.append(f"${value} renewal opportunity at risk")
+                    
+                    next_steps = str(crm_match.get('next_steps', '')).lower()
+                    if "sizing" in next_steps:
+                        urgency_reasons.append("Customer actively sizing - positive engagement signal")
+                    elif "renew" in next_steps:
+                        urgency_reasons.append("Renewal discussions in progress")
+                    elif crm_match.get('stage') == 'Qualified':
+                        urgency_reasons.append("Opportunity qualified but needs immediate action")
+                    
+                    urgency_reasons.append("Competitor could enter during gap period")
+                    
+                    reasoning_parts.extend([f"- {reason}" for reason in urgency_reasons])
+                elif urgency:
+                    reasoning_parts.append(f"- Contract expired {urgency['days_expired']} days ago with no CRM tracking")
+                    reasoning_parts.append(f"- ${value} at risk with no visibility into renewal status")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("RECOMMENDED ACTIONS:")
+                
+                # Format recipient display (use name if available, otherwise role)
+                recipient_display = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
+                
+                if crm_match:
+                    owner = crm_match.get('owner', 'the account owner')
+                    reasoning_parts.extend([
+                        f"1. Contact {owner} TODAY to get status update",
+                        f"2. Review CRM notes: \"{crm_match.get('next_steps', 'None')}\"",
+                        f"3. Draft executive email to {recipient_display} ({recipient_info['role']}) addressing renewal urgency",
+                        f"4. Target resolution within 14 days",
+                    ])
+                else:
+                    reasoning_parts.extend([
+                        "1. Create CRM opportunity immediately to track this expired contract",
+                        "2. Research customer contact and current relationship status",
+                        f"3. Draft outreach email to {recipient_display} ({recipient_info['role']}) to re-engage",
+                        "4. Escalate to management if no response within 7 days",
+                    ])
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("WHY THIS MATTERS:")
+                reasoning_parts.extend([
+                    f"- ${value} revenue at risk",
+                    f"- Customer relationship continuity depends on quick action",
+                    f"- Extended gap increases competitive vulnerability",
+                    f"- May impact future expansion opportunities with this customer",
+                ])
+                
+                detailed_actions.append({
+                    "contract": contract.get("file_name", "Unknown"),
+                    "priority": 100 if urgency and urgency["urgency_level"] == "CRITICAL" else 80,
+                    "reasoning": "\n".join(reasoning_parts),
+                    "specific_action": reasoning_parts[reasoning_parts.index("RECOMMENDED ACTIONS:") + 1] if "RECOMMENDED ACTIONS:" in reasoning_parts else "Review expired contract",
+                    "recipient_info": recipient_info,
+                    "crm_owner": crm_match.get('owner') if crm_match else None,
+                    "urgency_level": urgency["urgency_level"] if urgency else "HIGH"
+                })
+            
+            # Process renewal candidates
+            for contract in renewal_candidates:
+                urgency = calculate_urgency(contract)
+                crm_match = find_matching_data_for_contract(contract, matched_contracts)
+                products = extract_products(contract)
+                value = extract_contract_value(contract)
+                recipient_info = determine_recipient(contract, crm_match, lowered_query, partner_profile)
+                
+                reasoning_parts = [
+                    f"CONTRACT: {contract.get('file_name', 'Unknown')}",
+                    f"- Product(s): {', '.join(products)}",
+                    f"- Value: {value}",
+                ]
+                
+                if urgency:
+                    reasoning_parts.append(f"- Status: {urgency['status']}")
+                    reasoning_parts.append(f"- Days Until Expiration: {urgency['days_until_expiration']}")
+                    reasoning_parts.append(f"- End Date: {contract.get('end_date', 'Unknown')}")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("CRM LINKAGE:")
+                
+                if crm_match:
+                    reasoning_parts.extend([
+                        f"- Opportunity: \"{crm_match.get('opportunity_name', 'Unknown')}\"",
+                        f"- Owner: {crm_match.get('owner', 'Unknown')}",
+                        f"- Stage: {crm_match.get('stage', 'Unknown')}",
+                        f"- Amount: ${crm_match.get('amount', 0):,.0f}",
+                        f"- Next Steps: \"{crm_match.get('next_steps', 'None')}\"",
+                    ])
+                else:
+                    reasoning_parts.append("- WARNING: No matching CRM opportunity found for upcoming renewal")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("URGENCY ANALYSIS:")
+                
+                if urgency:
+                    if urgency["days_until_expiration"] <= 30:
+                        reasoning_parts.append(f"- URGENT: Only {urgency['days_until_expiration']} days until expiration")
+                    else:
+                        reasoning_parts.append(f"- {urgency['days_until_expiration']} days until expiration - renewal window open")
+                    
+                    if crm_match:
+                        reasoning_parts.append(f"- CRM shows {crm_match.get('stage')} stage - {crm_match.get('next_steps', 'no next steps defined')}")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("RECOMMENDED ACTIONS:")
+                
+                # Format recipient display
+                recipient_display = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
+                
+                if crm_match:
+                    owner = crm_match.get('owner', 'the account owner')
+                    reasoning_parts.extend([
+                        f"1. Coordinate with {owner} on renewal timeline",
+                        f"2. Prepare renewal proposal with updated terms",
+                        f"3. Schedule meeting with customer {recipient_display} ({recipient_info['role']}) within 2 weeks",
+                        f"4. Align legal and procurement teams",
+                    ])
+                else:
+                    reasoning_parts.extend([
+                        "1. Create CRM renewal opportunity immediately",
+                        "2. Identify customer stakeholders and decision makers",
+                        f"3. Initiate renewal discussion with {recipient_display} ({recipient_info['role']})",
+                        "4. Set up internal renewal planning meeting",
+                    ])
+                
+                detailed_actions.append({
+                    "contract": contract.get("file_name", "Unknown"),
+                    "priority": 70 if urgency and urgency["urgency_level"] == "HIGH" else 50,
+                    "reasoning": "\n".join(reasoning_parts),
+                    "specific_action": reasoning_parts[reasoning_parts.index("RECOMMENDED ACTIONS:") + 1] if "RECOMMENDED ACTIONS:" in reasoning_parts else "Start renewal process",
+                    "recipient_info": recipient_info,
+                    "crm_owner": crm_match.get('owner') if crm_match else None,
+                    "urgency_level": urgency["urgency_level"] if urgency else "MEDIUM"
+                })
+            
+            # Sort by priority
+            detailed_actions.sort(key=lambda x: x["priority"], reverse=True)
+            
+            # Determine workflow name
             workflow_name = "portfolio_overview_30_day_actions"
             if "renewal" in lowered_query or "expired" in lowered_query or "expir" in lowered_query:
                 workflow_name = "renewal_expiration_awareness"
-            elif "draft me an email" in lowered_query or "reach out to the cpo" in lowered_query:
+            elif "draft me an email" in lowered_query or "reach out" in lowered_query:
                 workflow_name = "executive_outreach"
-
-            concrete_steps = []
-
-            if workflow_name == "portfolio_overview_30_day_actions":
-                for contract in active_contracts[:3]:
-                    filename = contract.get("file_name", "Unknown contract")
-                    concrete_steps.append(
-                        f"Review {filename} this week to confirm active status, enabled permissions, and any outstanding obligations."
-                    )
-                concrete_steps.extend([
-                    "Schedule a portfolio review with the Confluent account team within the next 30 days.",
-                    "Confirm whether any downstream SOW or enablement step is still required before additional co-sell activity."
-                ])
-
-            elif workflow_name == "renewal_expiration_awareness":
-                for contract in renewal_candidates[:3]:
-                    filename = contract.get("file_name", "Unknown contract")
-                    renewal_date = contract.get("derived_end_date", "Unknown date")
-                    concrete_steps.append(
-                        f"Start renewal outreach for {filename} now and align legal and partner management before {renewal_date}."
-                    )
-                for contract in recently_expired[:3]:
-                    filename = contract.get("file_name", "Unknown contract")
-                    concrete_steps.append(
-                        f"Review the recently expired contract {filename} and decide this week whether to renew, replace, or close it out."
-                    )
-                concrete_steps.append("Prepare a renewal and expiration dashboard for Confluent with notice windows and owners.")
-
-            elif workflow_name == "executive_outreach":
-                concrete_steps.extend([
-                    "Draft an executive email to the Confluent CPO with strategic partnership status and a clear call to action.",
-                    "Reference the signed ESA and current active agreements at a high level without legal detail.",
-                    "Propose a short alignment meeting in the next 2 weeks to discuss enablement and next-phase opportunities."
-                ])
-
-            for action in renewal_actions[:3]:
-                action_text = action.get("recommended_action")
-                if action_text and action_text not in concrete_steps:
-                    concrete_steps.append(action_text)
-
-            for step in portfolio_steps[:5]:
-                if step not in concrete_steps:
-                    concrete_steps.append(step)
-
-            if not concrete_steps:
-                concrete_steps = [
-                    "Review all active Confluent contracts and confirm current status.",
-                    "Update the CRM with the top three actions the seller should take next.",
-                    "Prepare outreach to Confluent stakeholders for the next milestone."
-                ]
-
-            top_action = concrete_steps[0]
-
-            if workflow_name == "portfolio_overview_30_day_actions":
+            
+            # Create comprehensive recommendation
+            if detailed_actions:
+                top_action = detailed_actions[0]
+                
                 action_lines = [
-                    "MATCHING_SCENARIO: Contract portfolio overview + next 30 day actions",
-                    f"ACTION: {top_action}",
-                    "PRIORITY: High",
-                    "TIMELINE: Next 30 Days"
+                    "=" * 80,
+                    "DETAILED CONTRACT ANALYSIS WITH REASONING",
+                    "=" * 80,
+                    "",
+                    f"PRIORITY 1: {top_action['urgency_level']} URGENCY - IMMEDIATE ACTION REQUIRED",
+                    "",
+                    top_action["reasoning"],
+                    "",
+                    "=" * 80,
                 ]
-            elif workflow_name == "renewal_expiration_awareness":
-                action_lines = [
-                    "MATCHING_SCENARIO: Renewal and expiration awareness",
-                    f"ACTION: {top_action}",
-                    "PRIORITY: High",
-                    "TIMELINE: Immediate and next 90 days"
-                ]
+                
+                # Add additional high-priority items
+                if len(detailed_actions) > 1:
+                    action_lines.extend([
+                        "",
+                        "ADDITIONAL HIGH-PRIORITY ITEMS:",
+                        "-" * 80,
+                    ])
+                    for i, action in enumerate(detailed_actions[1:3], 2):
+                        action_lines.extend([
+                            "",
+                            f"PRIORITY {i}: {action['contract']}",
+                            f"Urgency: {action['urgency_level']}",
+                            f"Action: {action['specific_action']}",
+                            f"Recipient: {action['recipient_info']['name'] if action['recipient_info']['name'] else action['recipient_info']['role']} ({action['recipient_info']['role']})",
+                        ])
+                        if action.get('crm_owner'):
+                            action_lines.append(f"CRM Owner: {action['crm_owner']}")
+                
+                recommended_action = {
+                    "workflow_name": workflow_name,
+                    "raw_recommendation": "\n".join(action_lines),
+                    "ranked_next_steps": [action["specific_action"] for action in detailed_actions],
+                    "detailed_actions": detailed_actions,
+                    "timestamp": datetime.now().isoformat()
+                }
             else:
-                action_lines = [
-                    "MATCHING_SCENARIO: Executive outreach (CPO email draft)",
-                    "ACTION: Draft and send an executive-ready email to the Confluent CPO focused on partnership status, enablement progress, and the proposed next meeting.",
-                    "PRIORITY: High",
-                    "TIMELINE: This Week"
-                ]
-
-            action_lines.extend([
-                f"RATIONALE: {' '.join(concrete_steps[:3])}",
-                "SUCCESS_CRITERIA: Seller has a concrete checklist, CRM Agent Next Steps is overwritten, and the next outreach is ready to send.",
-                "OWNER: IBM Seller"
-            ])
-
-            recommended_action = {
-                "workflow_name": workflow_name,
-                "raw_recommendation": "\n".join(action_lines),
-                "ranked_next_steps": concrete_steps,
-                "timestamp": datetime.now().isoformat()
-            }
+                # Fallback if no detailed actions
+                recommended_action = {
+                    "workflow_name": workflow_name,
+                    "raw_recommendation": "No urgent contract actions identified. Review portfolio for upcoming renewals.",
+                    "ranked_next_steps": ["Review contract portfolio", "Update CRM with current status"],
+                    "detailed_actions": [],
+                    "timestamp": datetime.now().isoformat()
+                }
 
             return {
                 "recommended_action": recommended_action,
-                "messages": ["Next best action determined"]
+                "messages": ["Next best action determined with detailed reasoning"]
             }
         
         def create_artifacts_node(state: ActionState) -> dict:
-            """Create actionable artifacts (CRM updates, draft email)"""
+            """Create actionable artifacts (CRM updates, draft email) with detailed context"""
             contract_summary = state.get("contract_summary", {})
             partner_profile = state.get("partner_profile", {})
             recommended_action = state.get("recommended_action", {})
@@ -425,6 +700,7 @@ class ActionAgent:
             partner_name = partner_profile.get("partner_name", "Partner")
             portfolio = contract_summary.get("portfolio_summary", {})
             ranked_next_steps = recommended_action.get("ranked_next_steps", [])
+            detailed_actions = recommended_action.get("detailed_actions", [])
             top_step = ranked_next_steps[0] if ranked_next_steps else "Review contract portfolio and schedule follow-up."
             
             # Get potential products from contract summary
@@ -452,7 +728,7 @@ class ActionAgent:
                 "due_date": (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d"),
                 "priority": risk_assessment.get("risk_level", "Medium"),
                 "contracts_reviewed": len(portfolio.get("contract_paths", [])),
-                "agent_next_steps": ranked_next_steps,
+                "next_steps": ranked_next_steps,
                 "seller_query": seller_query,
                 "potential_products": products_str,
                 "updated_timestamp": datetime.now().isoformat()
@@ -461,10 +737,7 @@ class ActionAgent:
             try:
                 df = self._load_crm_data()
                 if not df.empty:
-                    # Ensure Agent Next Steps column exists
-                    if "Agent Next Steps" not in df.columns:
-                        df["Agent Next Steps"] = ""
-
+                    # Create full next steps text with all recommendations
                     agent_next_steps_text = " | ".join(ranked_next_steps[:5])
                     
                     # ALWAYS create a new row for each seller inquiry
@@ -482,11 +755,10 @@ class ActionAgent:
                     if "Close Date" in df.columns:
                         new_row["Close Date"] = crm_updates["due_date"]
                     if "Next Steps" in df.columns:
-                        new_row["Next Steps"] = crm_updates["next_step"]
+                        # Put full agent recommendations in Next Steps column
+                        new_row["Next Steps"] = agent_next_steps_text
                     if "Products" in df.columns:
                         new_row["Products"] = products_str
-                    if "Agent Next Steps" in df.columns:
-                        new_row["Agent Next Steps"] = agent_next_steps_text
 
                     # Add the new row to the dataframe
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
@@ -501,19 +773,66 @@ class ActionAgent:
                 crm_updates["crm_file_updated"] = False
                 crm_updates["crm_update_error"] = str(e)
 
+            # Enhanced email generation with detailed context and extracted executive info
+            recipient_info = {"role": "CPO", "name": None, "title": "CPO"}
+            contract_details = ""
+            crm_context = ""
+            urgency_context = ""
+            
+            if detailed_actions:
+                top_action = detailed_actions[0]
+                recipient_info = top_action.get("recipient_info", {"role": "CPO", "name": None, "title": "CPO"})
+                
+                # Extract contract details from reasoning
+                reasoning = top_action.get("reasoning", "")
+                if "CONTRACT:" in reasoning:
+                    contract_section = reasoning.split("CRM LINKAGE:")[0] if "CRM LINKAGE:" in reasoning else reasoning.split("\n\n")[0]
+                    contract_details = contract_section.strip()
+                
+                if "CRM LINKAGE:" in reasoning:
+                    crm_section = reasoning.split("CRM LINKAGE:")[1].split("URGENCY ANALYSIS:")[0] if "URGENCY ANALYSIS:" in reasoning else reasoning.split("CRM LINKAGE:")[1].split("\n\n")[0]
+                    crm_context = crm_section.strip()
+                
+                if "URGENCY ANALYSIS:" in reasoning:
+                    urgency_section = reasoning.split("URGENCY ANALYSIS:")[1].split("RECOMMENDED ACTIONS:")[0] if "RECOMMENDED ACTIONS:" in reasoning else reasoning.split("URGENCY ANALYSIS:")[1].split("\n\n")[0]
+                    urgency_context = urgency_section.strip()
+            
+            # Determine greeting based on whether we have the executive's name
+            recipient_display = recipient_info["name"] if recipient_info["name"] else f"the {recipient_info['role']}"
+            greeting_name = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
+            
             email_prompt = ChatPromptTemplate.from_template(
-                "Write a professional outreach email from an IBM seller to the CPO at {partner_name}.\n\n"
-                "Context:\n"
+                "You are drafting ONE professional email from an IBM seller to {recipient_display} at {partner_name}.\n\n"
+                "RECIPIENT INFORMATION:\n"
+                "- Role: {recipient_role}\n"
+                "- Name: {recipient_name}\n\n"
+                "CONTRACT CONTEXT:\n"
+                "{contract_details}\n\n"
+                "CRM INFORMATION:\n"
+                "{crm_context}\n\n"
+                "URGENCY:\n"
+                "{urgency_context}\n\n"
+                "ADDITIONAL CONTEXT:\n"
                 "- Risk Level: {risk_level}\n"
-                "- Top Next Step: {top_step}\n"
-                "- Additional Steps: {additional_steps}\n"
-                "- Partner Maturity: {maturity}\n\n"
-                "The email should:\n"
-                "1. Use executive tone and strategic framing\n"
-                "2. Reference active IBM-Confluent agreements at a high level only\n"
-                "3. Avoid legal language and operational overload\n"
-                "4. Include a clear call to action and suggested meeting\n"
-                "Return a full email with subject line."
+                "- Partner Maturity: {maturity}\n"
+                "- Top Priority Action: {top_step}\n\n"
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. Write EXACTLY ONE email - no variations, no alternatives, no examples\n"
+                "2. Use executive tone for {recipient_role}\n"
+                "3. Reference specific contract details naturally\n"
+                "4. Keep under 200 words\n"
+                "5. End with EXACTLY:\n"
+                "   Best regards,\n"
+                "   [Your Name]\n"
+                "   IBM Seller\n\n"
+                "OUTPUT FORMAT (follow exactly):\n"
+                "Subject: [one line]\n\n"
+                "Dear [Name or Role],\n\n"
+                "[2-3 paragraphs]\n\n"
+                "Best regards,\n"
+                "[Your Name]\n"
+                "IBM Seller\n\n"
+                "STOP after the signature. Do NOT write multiple versions. Do NOT add explanations. Output ONLY ONE complete email."
             )
 
             llm = WatsonxLLM(
@@ -522,52 +841,103 @@ class ActionAgent:
                 apikey=self.apikey,
                 project_id=self.project_id,
                 params={
-                    "max_new_tokens": 500,
+                    "max_new_tokens": 600,
                     "temperature": 0.3,
                     "decoding_method": "sample"
                 }
             )
 
             formatted_prompt = email_prompt.invoke({
+                "recipient_display": recipient_display,
+                "recipient_role": recipient_info["role"],
+                "recipient_name": recipient_info["name"] if recipient_info["name"] else "Not available - use role title",
                 "partner_name": partner_name,
-                "risk_level": risk_assessment.get("risk_level", "Unknown"),
-                "top_step": top_step,
-                "additional_steps": "; ".join(ranked_next_steps[1:3]) if len(ranked_next_steps) > 1 else "None",
-                "maturity": partner_profile.get("maturity_level", "Partner")
+                "contract_details": contract_details if contract_details else "Active partnership agreements",
+                "crm_context": crm_context if crm_context else "Reviewing partnership status",
+                "urgency_context": urgency_context if urgency_context else "Ensuring continuity of our partnership",
+                "risk_level": risk_assessment.get("risk_level", "Medium"),
+                "maturity": partner_profile.get("maturity_level", "Partner"),
+                "top_step": top_step
             })
 
             result = llm.invoke(formatted_prompt)
-            draft_email = result.content if hasattr(result, "content") else str(result)
+            draft_email_raw = result.content if hasattr(result, "content") else str(result)
+            
+            # POST-PROCESS: Extract only the FIRST complete email
+            # LLM sometimes generates multiple versions despite instructions
+            draft_email = self._extract_first_email(draft_email_raw)
+            
+            # Format recipient display for output
+            recipient_display = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
 
             return {
                 "crm_updates": crm_updates,
                 "draft_email": draft_email,
-                "messages": ["Artifacts created: CRM update and draft email"]
+                "email_recipient_info": recipient_info,
+                "email_recipient_display": recipient_display,
+                "messages": [f"Artifacts created: CRM update and draft email to {recipient_display}"]
             }
         
         def generate_final_output_node(state: ActionState) -> dict:
-            """Generate final comprehensive output"""
+            """Generate final comprehensive output with detailed reasoning"""
             recommended_action = state.get("recommended_action", {})
             risk_assessment = state.get("risk_assessment", {})
             crm_updates = state.get("crm_updates", {})
             draft_email = state.get("draft_email", "")
+            email_recipient_info = state.get("email_recipient_info", {"role": "CPO", "name": None})
+            email_recipient_display = state.get("email_recipient_display", "CPO")
             historical_patterns = state.get("historical_patterns", {})
+            detailed_actions = recommended_action.get("detailed_actions", [])
             
             output_parts = [
                 "=" * 80,
-                "ACTION AGENT - NEXT BEST STEP RECOMMENDATION",
+                "ACTION AGENT - DETAILED NEXT BEST STEP RECOMMENDATION",
                 "=" * 80,
                 "",
-                "RECOMMENDED ACTION:",
-                "-" * 80,
-                recommended_action.get("raw_recommendation", "No action determined"),
+            ]
+            
+            # Add detailed recommendation with full reasoning
+            if recommended_action.get("raw_recommendation"):
+                output_parts.extend([
+                    recommended_action["raw_recommendation"],
+                    ""
+                ])
+            else:
+                output_parts.extend([
+                    "RECOMMENDED ACTION:",
+                    "-" * 80,
+                    "No urgent actions identified. Review portfolio for upcoming renewals.",
+                    ""
+                ])
+            
+            # Add summary of all priority items
+            if detailed_actions:
+                output_parts.extend([
+                    "",
+                    "PRIORITY SUMMARY:",
+                    "-" * 80,
+                ])
+                for i, action in enumerate(detailed_actions, 1):
+                    recipient_info = action.get('recipient_info', {"role": "CPO", "name": None})
+                    recipient_display = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
+                    
+                    output_parts.extend([
+                        f"{i}. {action['contract']} - {action['urgency_level']} urgency",
+                        f"   Recipient: {recipient_display} ({recipient_info['role']})",
+                        f"   Action: {action['specific_action']}",
+                    ])
+                    if action.get('crm_owner'):
+                        output_parts.append(f"   CRM Owner: {action['crm_owner']}")
+                    output_parts.append("")
+            
+            output_parts.extend([
                 "",
                 "RISK ASSESSMENT:",
                 "-" * 80,
                 f"Risk Level: {risk_assessment.get('risk_level', 'Unknown')}",
                 f"Risk Score: {risk_assessment.get('risk_score', 0)}/100",
                 "Risk Factors:",
-            ]
+            ])
             
             for factor in risk_assessment.get('risk_factors', []):
                 output_parts.append(f"  - {factor}")
@@ -578,17 +948,43 @@ class ActionAgent:
                 "-" * 80,
                 f"Pattern Confidence: {historical_patterns.get('pattern_confidence', 'Unknown')}",
                 f"Based on {historical_patterns.get('total_won_deals', 0)} won deals",
+                f"Average Deal Size: ${historical_patterns.get('average_deal_size', 0):,.0f}",
                 "",
-                "CRM UPDATE:",
+                "CRM UPDATE STATUS:",
                 "-" * 80,
-                json.dumps(crm_updates, indent=2),
+                f"Opportunity Created: {crm_updates.get('opportunity_name', 'N/A')}",
+                f"Priority: {crm_updates.get('priority', 'N/A')}",
+                f"Due Date: {crm_updates.get('due_date', 'N/A')}",
+                f"CRM File Updated: {crm_updates.get('crm_file_updated', False)}",
                 "",
-                "DRAFT FOLLOW-UP EMAIL:",
+                f"DRAFT EMAIL TO {email_recipient_display}:",
                 "-" * 80,
                 draft_email,
                 "",
                 "=" * 80,
-                "Action recommendation complete. Ready for seller execution.",
+                "NEXT STEPS FOR SELLER:",
+                "=" * 80,
+            ])
+            
+            # Add actionable next steps
+            if detailed_actions:
+                output_parts.append("1. Review the detailed contract analysis above")
+                output_parts.append(f"2. Send the draft email to {email_recipient_display}")
+                if detailed_actions[0].get('crm_owner'):
+                    output_parts.append(f"3. Coordinate with {detailed_actions[0]['crm_owner']} on CRM opportunity")
+                output_parts.append("4. Update CRM with progress and next meeting date")
+                output_parts.append("5. Set follow-up reminder for 7 days if no response")
+            else:
+                output_parts.extend([
+                    "1. Review contract portfolio for upcoming renewals",
+                    "2. Update CRM with current partnership status",
+                    "3. Schedule quarterly business review with partner"
+                ])
+            
+            output_parts.extend([
+                "",
+                "=" * 80,
+                "Action recommendation complete. All details provided for immediate execution.",
                 "=" * 80
             ])
             
@@ -596,7 +992,7 @@ class ActionAgent:
             
             return {
                 "final_output": final_output,
-                "messages": ["Final output generated"]
+                "messages": ["Final output generated with detailed reasoning"]
             }
         
         # Build the graph
@@ -620,13 +1016,15 @@ class ActionAgent:
         self.graph = graph.compile()
         return self.graph
     
-    def run(self, contract_summary: dict, partner_profile: dict, seller_query: str = "") -> dict:
+    def run(self, contract_summary: dict, partner_profile: dict, seller_query: str = "", matching_data: Optional[dict] = None) -> dict:
         """
         Run the action agent to determine next best action.
         
         Args:
             contract_summary: Output from Contract Agent
             partner_profile: Output from Research Agent
+            seller_query: Seller's original query
+            matching_data: Output from Matching Agent (optional)
             
         Returns:
             Final state with action recommendation and artifacts
@@ -638,6 +1036,7 @@ class ActionAgent:
             "contract_summary": contract_summary,
             "partner_profile": partner_profile,
             "seller_query": seller_query,
+            "matching_data": matching_data or {},
             "messages": []
         }
         
