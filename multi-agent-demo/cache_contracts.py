@@ -60,6 +60,9 @@ def extract_structured_fields(text):
     Extract structured fields from contract text using regex (no LLM).
     This is a fast fallback that works without API calls.
     """
+    from dateutil.relativedelta import relativedelta
+    from dateutil.parser import parse as parse_date
+    
     structured = {}
     
     # Extract amount - look for "committed order value of $X"
@@ -71,42 +74,64 @@ def extract_structured_fields(text):
         amount_match = re.search(r'\$[\d,]+\.?\d*', text)
         structured['amount'] = amount_match.group(0) if amount_match else "Not specified"
     
-    # Extract products
+    # Extract products - look for ALL mentions
     products = []
-    if "watsonx" in text.lower():
-        if "orchestrate" in text.lower():
+    text_lower = text.lower()
+    
+    # Check for all watsonx variants
+    if "watsonx" in text_lower:
+        if "orchestrate" in text_lower:
             products.append("watsonx Orchestrate")
-        if "governance" in text.lower():
+        if "governance" in text_lower or "watsonx.governance" in text_lower:
             products.append("watsonx.governance")
-        if "watsonx as a service" in text.lower() or "watsonx.ai" in text.lower():
+        if "watsonx.ai" in text_lower or "watsonx ai" in text_lower:
+            products.append("watsonx.ai")
+        if "watsonx.data" in text_lower or "watsonx data" in text_lower:
+            products.append("watsonx.data")
+        if "watsonx as a service" in text_lower:
             products.append("watsonx as a Service")
+        if "code assistant" in text_lower:
+            products.append("watsonx Code Assistant")
+        # Only add generic if no specific products found
         if not products:
             products.append("watsonx ESA")
-    if "cognos" in text.lower():
+    
+    if "cognos" in text_lower:
         products.append("Cognos")
-    structured['products'] = products if products else ["Not specified"]
+    
+    # Remove duplicates while preserving order
+    products = list(dict.fromkeys(products))
+    structured['products'] = products if products else ["Unknown"]
     
     # Extract dates
     effective_date_match = re.search(r'effective as (\w+ \d{1,2}, \d{4})', text, re.IGNORECASE)
-    structured['start_date'] = effective_date_match.group(1) if effective_date_match else "Not specified"
+    start_date_str = effective_date_match.group(1) if effective_date_match else "Not specified"
+    structured['start_date'] = start_date_str
     
-    # Extract term length
+    # Extract term length and calculate actual end date
     term_match = re.search(r'term of this TD will be (\w+) \((\d+)\) years? from the Effective Date', text, re.IGNORECASE)
-    if term_match:
-        term_years = term_match.group(2)
+    if term_match and start_date_str != "Not specified":
+        term_years = int(term_match.group(2))
         structured['term_length'] = f"{term_years} year(s)"
-        structured['end_date'] = f"{term_years} year(s) from effective date"
+        
+        # Calculate actual end date
+        try:
+            start_date = parse_date(start_date_str)
+            end_date = start_date + relativedelta(years=term_years)
+            structured['end_date'] = end_date.strftime("%Y-%m-%d")
+        except:
+            structured['end_date'] = f"{term_years} year(s) from {start_date_str}"
     else:
         structured['term_length'] = "Not specified"
         structured['end_date'] = "Not specified"
     
-    # Extract parties
+    # Extract parties - ensure BOTH are captured
     parties = []
-    if "confluent" in text.lower():
+    if "confluent" in text_lower:
         parties.append("Confluent")
-    if "ibm" in text.lower():
+    if "ibm" in text_lower:
         parties.append("IBM")
-    structured['parties'] = parties if parties else ["Not specified"]
+    structured['parties'] = parties if parties else ["Unknown"]
     
     # Contract type
     structured['contract_type'] = "ESA" if "ESA" in text else "Sales Agreement"
