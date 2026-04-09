@@ -66,8 +66,7 @@ class ActionAgent:
         url: str = "https://us-south.ml.cloud.ibm.com",
         apikey: Optional[str] = None,
         project_id: Optional[str] = None,
-        crm_file_path: str = "docs/Confluent Sales Cloud Infor.xlsx",
-        scenario_actions_path: str = "docs/ScenarioActions.pdf"
+        crm_file_path: str = "docs/Confluent Sales Cloud Infor.xlsx"
     ):
         """
         Initialize Action Agent.
@@ -78,7 +77,6 @@ class ActionAgent:
             apikey: IBM Cloud API key (defaults to WATSONX_APIKEY env var)
             project_id: Watsonx project ID (defaults to WATSONX_PROJECT_ID env var)
             crm_file_path: Path to CRM Excel file
-            scenario_actions_path: Path to scenario actions PDF
         """
         self.model_id = model_id
         self.url = url
@@ -86,40 +84,17 @@ class ActionAgent:
         self.apikey = apikey or os.getenv("WATSONX_APIKEY")
         self.project_id = project_id or os.getenv("WATSONX_PROJECT_ID")
         self.crm_file_path = crm_file_path
-        self.scenario_actions_path = scenario_actions_path
         self.graph = None
-        self.scenario_actions_text = None
-        
+
         # Validate credentials
         if not self.apikey:
             raise ValueError("WATSONX_APIKEY must be provided or set in environment variables")
         if not self.project_id:
             raise ValueError("WATSONX_PROJECT_ID must be provided or set in environment variables")
         
-        # Load scenario actions on initialization
-        self._load_scenario_actions()
-        
-    def _load_scenario_actions(self) -> None:
-        """Load scenario actions from PDF file"""
-        try:
-            pdf_path = Path(self.scenario_actions_path)
-            if not pdf_path.exists():
-                print(f"Warning: Scenario actions file not found: {pdf_path}")
-                self.scenario_actions_text = ""
-                return
-            
-            # Extract text from PDF
-            with open(pdf_path, 'rb') as pdf_file:
-                pdf_reader = PyPDF2.PdfReader(pdf_file)
-                text_parts = []
-                for page in pdf_reader.pages:
-                    text_parts.append(page.extract_text())
-                self.scenario_actions_text = '\n'.join(text_parts)
-            
-            print(f"Loaded scenario actions from {pdf_path} ({len(self.scenario_actions_text)} characters)")
-        except Exception as e:
-            print(f"Error loading scenario actions: {str(e)}")
-            self.scenario_actions_text = ""
+        # NOTE: ScenarioActions.pdf loading removed - was never used in the code
+        # If scenario-based actions are needed in the future, implement them in the
+        # determine_action_node with actual logic rather than just loading unused text
     
     def _load_crm_data(self) -> pd.DataFrame:
         """Load CRM data from Excel file"""
