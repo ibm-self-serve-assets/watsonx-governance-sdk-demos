@@ -248,12 +248,16 @@ Be thorough - consider semantic relationships, not just exact string matches."""
     ) -> tuple[List[dict], List[dict]]:
         """
         Match contracts to CRM opportunities using LLM-based intelligent matching.
+        Enhanced with renewal detection, CRM stage analysis, and urgency flags.
         
         Returns:
             Tuple of (matched_contracts, unmatched_contracts)
         """
+        from datetime import datetime
+        
         matched = []
         unmatched = []
+        now = datetime.now().date()
         
         for contract in contracts:
             filename = contract.get("file_name", "")
@@ -270,10 +274,55 @@ Be thorough - consider semantic relationships, not just exact string matches."""
             term_length = structured_summary.get("term_length", "Unknown")
             status = contract.get("status", "unknown")
             
+            # Calculate days until renewal/expiration
+            days_until_renewal = None
+            renewal_urgency = "NONE"
+            is_renewal = False
+            
+            if end_date != "Unknown":
+                try:
+                    end_date_obj = datetime.fromisoformat(end_date).date()
+                    days_until_renewal = (end_date_obj - now).days
+                    
+                    if days_until_renewal < 0:
+                        renewal_urgency = "EXPIRED"
+                    elif days_until_renewal <= 30:
+                        renewal_urgency = "CRITICAL"
+                    elif days_until_renewal <= 90:
+                        renewal_urgency = "HIGH"
+                    elif days_until_renewal <= 180:
+                        renewal_urgency = "MEDIUM"
+                    else:
+                        renewal_urgency = "LOW"
+                except:
+                    pass
+            
+            # Check if this is a renewal based on filename or title
+            filename_lower = filename.lower()
+            is_renewal = "renewal" in filename_lower or "renew" in filename_lower
+            
             # Use LLM to find matching opportunities
             matching_opps, confidence, reasoning = self._match_with_llm(contract, opportunities)
             
+            # Analyze CRM stage for matched opportunities
+            crm_stage_analysis = None
+            active_engagement = False
+            
             if matching_opps:
+                primary_opp = matching_opps[0]
+                stage = primary_opp.get("stage", "Unknown")
+                
+                # CRM stage analysis: lost = failed, won = contract signed, anything else = active engagement
+                if stage == "Lost":
+                    crm_stage_analysis = "FAILED - Deal was lost"
+                    active_engagement = False
+                elif stage == "Won":
+                    crm_stage_analysis = "CONTRACT SIGNED - Deal won"
+                    active_engagement = False
+                else:
+                    crm_stage_analysis = f"ACTIVE ENGAGEMENT - Stage: {stage}"
+                    active_engagement = True
+                
                 matched.append({
                     "contract": contract,
                     "contract_file": filename,
@@ -283,18 +332,32 @@ Be thorough - consider semantic relationships, not just exact string matches."""
                     "contract_end": end_date,
                     "contract_term": term_length,
                     "contract_status": status,
+                    "is_renewal": is_renewal,
+                    "days_until_renewal": days_until_renewal,
+                    "renewal_urgency": renewal_urgency,
                     "opportunities": matching_opps,
                     "match_confidence": confidence,
                     "match_reasoning": reasoning,
                     # Add CRM details from first matching opportunity
-                    "crm_opportunity": matching_opps[0].get("opportunity_name", "Unknown"),
-                    "crm_owner": matching_opps[0].get("owner", "Unknown"),
-                    "crm_stage": matching_opps[0].get("stage", "Unknown"),
-                    "crm_amount": matching_opps[0].get("amount", "Unknown"),
-                    "crm_close_date": matching_opps[0].get("close_date", "Unknown"),
-                    "crm_next_steps": matching_opps[0].get("next_steps", "None")
+                    "crm_opportunity": primary_opp.get("opportunity_name", "Unknown"),
+                    "crm_owner": primary_opp.get("owner", "Unknown"),
+                    "crm_stage": stage,
+                    "crm_stage_analysis": crm_stage_analysis,
+                    "active_engagement": active_engagement,
+                    "crm_amount": primary_opp.get("amount", "Unknown"),
+                    "crm_close_date": primary_opp.get("close_date", "Unknown"),
+                    "crm_next_steps": primary_opp.get("next_steps", "None")
                 })
             else:
+                # CRITICAL: No CRM match found - ACTION REQUIRED NOW
+                urgency_message = "⚠️ CRITICAL: No CRM opportunity found - ACTION REQUIRED NOW!"
+                if renewal_urgency == "EXPIRED" and days_until_renewal is not None:
+                    urgency_message = f"🚨 URGENT: Contract EXPIRED {abs(days_until_renewal)} days ago with NO CRM tracking!"
+                elif renewal_urgency == "CRITICAL" and days_until_renewal is not None:
+                    urgency_message = f"🚨 URGENT: Contract expires in {days_until_renewal} days with NO CRM tracking!"
+                elif renewal_urgency == "HIGH" and days_until_renewal is not None:
+                    urgency_message = f"⚠️ HIGH PRIORITY: Contract expires in {days_until_renewal} days with NO CRM tracking!"
+                
                 unmatched.append({
                     "contract": contract,
                     "contract_file": filename,
@@ -303,7 +366,12 @@ Be thorough - consider semantic relationships, not just exact string matches."""
                     "contract_start": start_date,
                     "contract_end": end_date,
                     "contract_status": status,
-                    "reason": f"No matching CRM opportunity found. {reasoning}"
+                    "is_renewal": is_renewal,
+                    "days_until_renewal": days_until_renewal,
+                    "renewal_urgency": renewal_urgency,
+                    "reason": f"No matching CRM opportunity found. {reasoning}",
+                    "urgency_message": urgency_message,
+                    "action_required": "CREATE CRM OPPORTUNITY IMMEDIATELY"
                 })
         
         return matched, unmatched
@@ -359,24 +427,34 @@ Be thorough - consider semantic relationships, not just exact string matches."""
             }
         
         def generate_output_node(state: MatchingState) -> dict:
-            """Generate final matching report"""
+            """Generate final matching report with enhanced renewal and CRM analysis"""
             matched = state.get("matched_contracts", [])
             unmatched = state.get("unmatched_contracts", [])
             
+            # Count critical items
+            expired_no_crm = sum(1 for u in unmatched if u.get("renewal_urgency") == "EXPIRED")
+            critical_no_crm = sum(1 for u in unmatched if u.get("renewal_urgency") in ["EXPIRED", "CRITICAL"])
+            active_engagement = sum(1 for m in matched if m.get("active_engagement", False))
+            
             output_parts = [
                 "=" * 80,
-                "MATCHING AGENT - CONTRACT-CRM CORRELATION",
+                "MATCHING AGENT - CONTRACT-CRM CORRELATION & RENEWAL ANALYSIS",
                 "=" * 80,
                 "",
-                f"Total Matched: {len(matched)}",
-                f"Total Unmatched: {len(unmatched)}",
+                f"📊 SUMMARY:",
+                f"  Total Matched: {len(matched)} (with CRM tracking)",
+                f"  Total Unmatched: {len(unmatched)} (⚠️ NO CRM TRACKING - ACTION REQUIRED)",
+                f"  Active Engagements: {active_engagement}",
+                f"  🚨 Expired without CRM: {expired_no_crm}",
+                f"  ⚠️ Critical/Expired without CRM: {critical_no_crm}",
                 ""
             ]
             
             if matched:
                 output_parts.extend([
-                    "MATCHED CONTRACTS:",
-                    "-" * 80
+                    "=" * 80,
+                    "✅ MATCHED CONTRACTS (CRM Tracking Active):",
+                    "=" * 80
                 ])
                 
                 for match in matched:
@@ -385,51 +463,108 @@ Be thorough - consider semantic relationships, not just exact string matches."""
                     opportunities = match["opportunities"]
                     end_date = match.get("contract_end", "Unknown")
                     status = match.get("contract_status", "unknown")
-                    confidence = match.get("match_confidence", "unknown")
-                    reasoning = match.get("match_reasoning", "No reasoning provided")
+                    is_renewal = match.get("is_renewal", False)
+                    days_until = match.get("days_until_renewal")
+                    urgency = match.get("renewal_urgency", "NONE")
+                    crm_stage = match.get("crm_stage_analysis", "Unknown")
+                    active_eng = match.get("active_engagement", False)
                     
                     output_parts.extend([
                         "",
-                        f"Product: {product}",
-                        f"Contract: {contract.get('file_name', 'Unknown')}",
-                        f"Status: {status}",
-                        f"End Date: {end_date}",
-                        f"Match Confidence: {confidence}",
-                        f"Match Reasoning: {reasoning[:100]}..." if len(reasoning) > 100 else f"Match Reasoning: {reasoning}",
-                        f"Matching Opportunities: {len(opportunities)}"
+                        f"📄 {product} - {contract.get('file_name', 'Unknown')}",
+                        f"   Contract Status: {status.upper()}",
+                        f"   End Date: {end_date}",
+                    ])
+                    
+                    if days_until is not None:
+                        if days_until < 0:
+                            output_parts.append(f"   ⏰ EXPIRED {abs(days_until)} days ago")
+                        else:
+                            output_parts.append(f"   ⏰ {days_until} days until renewal")
+                    
+                    output_parts.extend([
+                        f"   🎯 Renewal Urgency: {urgency}",
+                        f"   {'🔄 RENEWAL CONTRACT' if is_renewal else '📝 Initial Contract'}",
+                        "",
+                        f"   CRM LINKAGE:",
+                        f"   {'✅ ACTIVE ENGAGEMENT' if active_eng else '⚠️ NOT ACTIVE'} - {crm_stage}",
                     ])
                     
                     for opp in opportunities:
+                        stage = opp.get('stage', 'Unknown')
+                        stage_emoji = "✅" if stage == "Won" else "❌" if stage == "Lost" else "🔄"
                         output_parts.extend([
-                            f"  - {opp.get('opportunity_name', 'Unknown')}",
-                            f"    Owner: {opp.get('owner', 'Unknown')}",
-                            f"    Stage: {opp.get('stage', 'Unknown')}",
-                            f"    Amount: ${opp.get('amount', 0):,.0f}",
-                            f"    Next Steps: {opp.get('next_steps', 'None')}",
+                            f"   {stage_emoji} Opportunity: {opp.get('opportunity_name', 'Unknown')}",
+                            f"      Owner: {opp.get('owner', 'Unknown')}",
+                            f"      Stage: {stage}",
+                            f"      Amount: ${opp.get('amount', 0):,.0f}",
+                            f"      Next Steps: {opp.get('next_steps', 'None')}",
                         ])
             
             if unmatched:
                 output_parts.extend([
                     "",
-                    "UNMATCHED CONTRACTS (Need Attention):",
-                    "-" * 80
+                    "=" * 80,
+                    "🚨 UNMATCHED CONTRACTS - IMMEDIATE ACTION REQUIRED!",
+                    "=" * 80,
+                    "These contracts have NO CRM opportunity tracking.",
+                    "Someone needs to act on these NOW!",
+                    ""
                 ])
                 
-                for item in unmatched:
+                # Sort by urgency
+                unmatched_sorted = sorted(unmatched, key=lambda x: {
+                    "EXPIRED": 0, "CRITICAL": 1, "HIGH": 2, "MEDIUM": 3, "LOW": 4, "NONE": 5
+                }.get(x.get("renewal_urgency", "NONE"), 5))
+                
+                for item in unmatched_sorted:
                     contract = item["contract"]
+                    urgency = item.get("renewal_urgency", "NONE")
+                    days_until = item.get("days_until_renewal")
+                    urgency_msg = item.get("urgency_message", "")
+                    
+                    urgency_emoji = "🚨" if urgency in ["EXPIRED", "CRITICAL"] else "⚠️" if urgency == "HIGH" else "📋"
+                    
                     output_parts.extend([
                         "",
-                        f"Product: {item.get('contract_product', 'Unknown')}",
-                        f"Contract: {contract.get('file_name', 'Unknown')}",
-                        f"Status: {item.get('contract_status', 'unknown')}",
-                        f"End Date: {item.get('contract_end', 'Unknown')}",
-                        f"Reason: {item.get('reason', 'No reason provided')}"
+                        f"{urgency_emoji} {item.get('contract_product', 'Unknown')} - {contract.get('file_name', 'Unknown')}",
+                        f"   Contract Status: {item.get('contract_status', 'unknown').upper()}",
+                        f"   End Date: {item.get('contract_end', 'Unknown')}",
+                    ])
+                    
+                    if days_until is not None:
+                        if days_until < 0:
+                            output_parts.append(f"   ⏰ EXPIRED {abs(days_until)} days ago")
+                        else:
+                            output_parts.append(f"   ⏰ {days_until} days until renewal")
+                    
+                    output_parts.extend([
+                        f"   🎯 Urgency Level: {urgency}",
+                        f"   ❌ NO CRM OPPORTUNITY FOUND",
+                        f"   ⚡ {urgency_msg}",
+                        f"   📝 Action Required: {item.get('action_required', 'Create CRM opportunity')}",
+                        f"   💡 Why no match: {item.get('reason', 'Unknown')}"
                     ])
             
             output_parts.extend([
                 "",
                 "=" * 80,
-                "Matching complete. Use this information to prioritize seller actions.",
+                "KEY INSIGHTS:",
+                "=" * 80,
+                f"• {len(matched)} contracts have CRM tracking (someone is working on them)",
+                f"• {len(unmatched)} contracts have NO CRM tracking (need immediate attention)",
+                f"• {active_engagement} contracts have ACTIVE engagement (not lost/won)",
+            ])
+            
+            if critical_no_crm > 0:
+                output_parts.append(f"• 🚨 {critical_no_crm} CRITICAL contracts without CRM - ACT NOW!")
+            
+            output_parts.extend([
+                "",
+                "NEXT STEPS:",
+                "1. Review unmatched contracts and create CRM opportunities",
+                "2. Contact owners of active engagements for status updates",
+                "3. Prioritize expired/critical contracts for immediate outreach",
                 "=" * 80
             ])
             
@@ -437,7 +572,7 @@ Be thorough - consider semantic relationships, not just exact string matches."""
             
             return {
                 "final_output": final_output,
-                "messages": ["Matching report generated"]
+                "messages": ["Enhanced matching report with renewal analysis generated"]
             }
         
         # Build the graph

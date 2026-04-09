@@ -242,10 +242,10 @@ Example Output:
 
 ================================================================================
 
-PROMPT 4.1: LLM-Based Contract-CRM Matching
---------------------------------------------
-Location: matching_agent.py, line 140
-Purpose: Intelligently match contracts to CRM opportunities using semantic understanding
+PROMPT 4.1: LLM-Based Contract-CRM Matching (ENHANCED)
+-------------------------------------------------------
+Location: matching_agent.py, line 159
+Purpose: Intelligently match contracts to CRM opportunities using semantic understanding, with enhanced renewal detection and CRM stage analysis
 Model: meta-llama/llama-3-3-70b-instruct
 Parameters:
   - max_new_tokens: 500
@@ -276,6 +276,15 @@ REASONING: [Brief explanation of why these opportunities match or don't match]
 
 Be thorough - consider semantic relationships, not just exact string matches.
 ```
+
+ENHANCEMENTS IN VERSION 4.0:
+- Automatic calculation of days_until_renewal for every contract
+- Renewal urgency classification (EXPIRED, CRITICAL, HIGH, MEDIUM, LOW)
+- Detection of renewal contracts from titles ("renewal" in filename)
+- CRM stage analysis: Lost = FAILED, Won = CONTRACT SIGNED, Other = ACTIVE ENGAGEMENT
+- Active engagement flag to identify contracts being actively worked
+- Urgent alerts for contracts without CRM tracking
+- Enhanced output with visual indicators (emojis) and sorted by urgency
 
 Input Variables:
   - contract_info: Contract file name, products, amount, dates, status
@@ -327,10 +336,10 @@ The Matching Agent returns enriched match objects containing:
 
 ================================================================================
 
-PROMPT 5.1: Draft Email Generation
------------------------------------
-Location: action_agent.py, line 771
-Purpose: Generate professional executive outreach email with contract context
+PROMPT 5.1: Draft Email Generation (ENHANCED)
+----------------------------------------------
+Location: action_agent.py, line 804
+Purpose: Generate professional executive outreach email with contract context, expansion opportunities, and previous signers
 Model: meta-llama/llama-3-3-70b-instruct
 Parameters:
   - max_new_tokens: 600
@@ -345,6 +354,7 @@ RECIPIENT INFORMATION:
 - Role: {recipient_role}
 - Name: {recipient_name}
 - Use name in greeting if provided, otherwise use role title
+- NOTE: For Confluent CPO, name is ALWAYS "Shaun Clowes" (pre-acquisition executive)
 
 CONTRACT CONTEXT:
 {contract_details}
@@ -355,10 +365,17 @@ CRM INFORMATION:
 URGENCY:
 {urgency_context}
 
+EXPANSION OPPORTUNITIES:
+{expansion_analysis}
+
+PREVIOUS SIGNERS:
+{previous_signers}
+
 ADDITIONAL CONTEXT:
 - Risk Level: {risk_level}
 - Partner Maturity: {maturity}
 - Top Priority Action: {top_step}
+- Why Contract Expired: {expiration_reason}
 
 EMAIL REQUIREMENTS:
 1. Use executive tone appropriate for {recipient_role} level
@@ -369,10 +386,12 @@ EMAIL REQUIREMENTS:
 6. Keep it concise (under 200 words)
 7. Avoid legal jargon and operational details
 8. If name is provided, use it in greeting (e.g., 'Dear [Name]'), otherwise use role (e.g., 'Dear Chief Procurement Officer')
-9. MUST end with EXACTLY this signature (no variations):
-   Best regards,
-   [Your Name]
-   IBM Seller
+9. Mention expansion opportunities if identified
+10. Reference previous signers if appropriate for continuity
+11. MUST end with EXACTLY this signature (no variations):
+    Best regards,
+    [Your Name]
+    IBM Seller
 
 Return ONLY the final email draft. Do NOT include:
 - Multiple versions or drafts
@@ -382,6 +401,13 @@ Return ONLY the final email draft. Do NOT include:
 
 Provide ONE complete, polished email ready to send.
 ```
+
+ENHANCEMENTS IN VERSION 4.0:
+- Hard-coded Confluent CPO: Shaun Clowes (pre-acquisition)
+- Expansion opportunity context included in email
+- Previous contract signers referenced for continuity
+- Root cause analysis of why contract expired
+- Enhanced context for more targeted outreach
 
 Input Variables:
   - recipient_display: Name or role of recipient (e.g., "John Smith" or "CPO")
@@ -510,4 +536,4 @@ Tips for faster, more reliable prompts:
 ================================================================================
 
 LAST UPDATED: 2026-04-09
-VERSION: 2.0
+VERSION: 4.0 - Enhanced with renewal tracking, CRM stage analysis, expansion detection, root cause analysis, and hard-coded Confluent CPO

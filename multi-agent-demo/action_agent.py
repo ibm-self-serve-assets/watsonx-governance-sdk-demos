@@ -397,8 +397,22 @@ class ActionAgent:
                 return products or ["Unknown Product"]
             
             def extract_executive_info(partner_profile, role):
-                """Extract executive name from research data"""
+                """
+                Extract executive name from research data.
+                HARD-CODED: Confluent CPO prior to acquisition = Shaun Clowes
+                """
                 import re
+                
+                # HARD-CODED: Confluent CPO prior to IBM acquisition
+                partner_name = partner_profile.get("partner_name", "").lower()
+                if "confluent" in partner_name and role == "CPO":
+                    return {
+                        "name": "Shaun Clowes",
+                        "title": "Chief Product Officer (CPO)",
+                        "role": "CPO",
+                        "note": "Pre-acquisition executive (prior to IBM acquisition)"
+                    }
+                
                 exec_data = partner_profile.get("external_data", {}).get("executives", "")
                 
                 # Ensure exec_data is a string (handle case where it might be a dict or other type)
@@ -425,6 +439,111 @@ class ActionAgent:
                         opportunities = match.get("opportunities", [])
                         return opportunities[0] if opportunities else None
                 return None
+            
+            def extract_contract_signers(contract):
+                """Extract previous contract signers and key people from contract"""
+                structured = contract.get("structured_summary", {})
+                parties = structured.get("parties", [])
+                
+                # Extract names from parties list
+                signers = []
+                for party in parties:
+                    if isinstance(party, str):
+                        # Look for person names (capitalized words)
+                        import re
+                        names = re.findall(r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b', party)
+                        signers.extend(names)
+                
+                return list(set(signers)) if signers else ["Unknown"]
+            
+            def detect_expansion_opportunity(contract, crm_match):
+                """Detect if there's an upsell/expansion opportunity"""
+                expansion_signals = []
+                can_expand = False
+                
+                # Check contract value vs CRM opportunity value
+                contract_value = extract_contract_value(contract)
+                if crm_match and isinstance(contract_value, (int, float)):
+                    crm_amount = crm_match.get("amount", 0)
+                    if isinstance(crm_amount, (int, float)) and crm_amount > contract_value * 1.2:
+                        expansion_signals.append(f"CRM opportunity (${crm_amount:,.0f}) is 20%+ higher than contract value (${contract_value:,.0f})")
+                        can_expand = True
+                
+                # Check for expansion keywords in CRM next steps
+                if crm_match:
+                    next_steps = str(crm_match.get("next_steps", "")).lower()
+                    if "expand" in next_steps or "expansion" in next_steps:
+                        expansion_signals.append("CRM next steps mention expansion")
+                        can_expand = True
+                    if "upsell" in next_steps or "additional" in next_steps:
+                        expansion_signals.append("CRM next steps mention upsell/additional products")
+                        can_expand = True
+                    if "sizing" in next_steps:
+                        expansion_signals.append("Customer actively sizing - potential for expansion")
+                        can_expand = True
+                
+                # Check product mix for expansion potential
+                products = extract_products(contract)
+                if len(products) == 1 and products[0] in ["Cognos", "watsonx ESA"]:
+                    expansion_signals.append(f"Single product ({products[0]}) - opportunity to introduce complementary solutions")
+                    can_expand = True
+                
+                return {
+                    "can_expand": can_expand,
+                    "signals": expansion_signals,
+                    "recommendation": "Explore expansion opportunities during renewal discussion" if can_expand else "Focus on renewal at current scope"
+                }
+            
+            def analyze_why_expired(contract, crm_match):
+                """Analyze why a contract expired without renewal"""
+                reasons = []
+                
+                if not crm_match:
+                    reasons.append("❌ No CRM opportunity created - likely no one reached out")
+                    reasons.append("⚠️ Lack of proactive engagement from sales team")
+                    return {
+                        "primary_reason": "No proactive outreach - no CRM tracking",
+                        "details": reasons,
+                        "action": "URGENT: Create CRM opportunity and reach out immediately"
+                    }
+                
+                # If there is a CRM match, analyze the stage
+                stage = crm_match.get("stage", "Unknown")
+                next_steps = str(crm_match.get("next_steps", "")).lower()
+                
+                if stage == "Lost":
+                    reasons.append(f"❌ Deal marked as Lost in CRM")
+                    reasons.append(f"📝 Reason: {crm_match.get('next_steps', 'No reason provided')}")
+                    return {
+                        "primary_reason": "Deal was lost",
+                        "details": reasons,
+                        "action": "Review loss reason and develop win-back strategy"
+                    }
+                
+                if stage == "Won":
+                    reasons.append("✅ Deal was won but contract may have expired naturally")
+                    return {
+                        "primary_reason": "Natural expiration after successful engagement",
+                        "details": reasons,
+                        "action": "Reach out for renewal discussion"
+                    }
+                
+                # Active engagement but still expired
+                if "sizing" in next_steps or "working" in next_steps:
+                    reasons.append("🔄 Active engagement but contract expired during negotiations")
+                    reasons.append("⏰ Timing issue - discussions ongoing but contract lapsed")
+                    return {
+                        "primary_reason": "Timing gap - active discussions but contract expired",
+                        "details": reasons,
+                        "action": "Accelerate renewal process - customer is engaged"
+                    }
+                
+                reasons.append("⚠️ Unknown reason - requires investigation")
+                return {
+                    "primary_reason": "Requires investigation",
+                    "details": reasons,
+                    "action": "Contact account owner for status update"
+                }
             
             def determine_recipient(contract, crm_match, query, partner_profile):
                 """Determine email recipient based on context"""
@@ -455,11 +574,15 @@ class ActionAgent:
                 products = extract_products(contract)
                 value = extract_contract_value(contract)
                 recipient_info = determine_recipient(contract, crm_match, lowered_query, partner_profile)
+                signers = extract_contract_signers(contract)
+                expansion = detect_expansion_opportunity(contract, crm_match)
+                expiration_analysis = analyze_why_expired(contract, crm_match)
                 
                 reasoning_parts = [
                     f"CONTRACT: {contract.get('file_name', 'Unknown')}",
                     f"- Product(s): {', '.join(products)}",
                     f"- Value: {value}",
+                    f"- Previous Signers: {', '.join(signers)}",
                 ]
                 
                 if urgency:
@@ -470,17 +593,38 @@ class ActionAgent:
                 reasoning_parts.append("CRM LINKAGE:")
                 
                 if crm_match:
+                    stage = crm_match.get('stage', 'Unknown')
+                    stage_emoji = "✅" if stage == "Won" else "❌" if stage == "Lost" else "🔄"
+                    stage_status = "CONTRACT SIGNED" if stage == "Won" else "FAILED" if stage == "Lost" else "ACTIVE ENGAGEMENT"
+                    
                     reasoning_parts.extend([
+                        f"- {stage_emoji} CRM Status: {stage_status}",
                         f"- Opportunity: \"{crm_match.get('opportunity_name', 'Unknown')}\"",
                         f"- Owner: {crm_match.get('owner', 'Unknown')}",
-                        f"- Stage: {crm_match.get('stage', 'Unknown')}",
+                        f"- Stage: {stage}",
                         f"- Amount: ${crm_match.get('amount', 0):,.0f}",
                         f"- Close Date: {crm_match.get('close_date', 'Unknown')}",
                         f"- Next Steps: \"{crm_match.get('next_steps', 'None')}\"",
                     ])
                 else:
-                    reasoning_parts.append("- WARNING: No matching CRM opportunity found!")
-                    reasoning_parts.append("- ACTION REQUIRED: Create CRM opportunity to track renewal")
+                    reasoning_parts.append("- ⚠️ WARNING: No matching CRM opportunity found!")
+                    reasoning_parts.append("- 🚨 ACTION REQUIRED: Create CRM opportunity to track renewal")
+                    reasoning_parts.append("- 📝 This means NO ONE is actively working on this renewal")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("WHY DID THIS CONTRACT EXPIRE?")
+                reasoning_parts.append(f"- Primary Reason: {expiration_analysis['primary_reason']}")
+                for detail in expiration_analysis['details']:
+                    reasoning_parts.append(f"  {detail}")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("EXPANSION OPPORTUNITY ANALYSIS:")
+                reasoning_parts.append(f"- Can Expand: {'YES ✅' if expansion['can_expand'] else 'NO'}")
+                if expansion['signals']:
+                    reasoning_parts.append("- Signals:")
+                    for signal in expansion['signals']:
+                        reasoning_parts.append(f"  • {signal}")
+                reasoning_parts.append(f"- Recommendation: {expansion['recommendation']}")
                 
                 reasoning_parts.append("")
                 reasoning_parts.append("URGENCY ANALYSIS:")
@@ -504,27 +648,60 @@ class ActionAgent:
                 elif urgency:
                     reasoning_parts.append(f"- Contract expired {urgency['days_expired']} days ago with no CRM tracking")
                     reasoning_parts.append(f"- ${value} at risk with no visibility into renewal status")
+                    reasoning_parts.append(f"- 🚨 CRITICAL: {expiration_analysis['action']}")
+                
+                reasoning_parts.append("")
+                reasoning_parts.append("KEY PEOPLE TO CONTACT:")
+                
+                # Format recipient display (use name if available, otherwise role)
+                recipient_display = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
+                if recipient_info.get("note"):
+                    reasoning_parts.append(f"- Primary: {recipient_display} ({recipient_info['role']}) - {recipient_info['note']}")
+                else:
+                    reasoning_parts.append(f"- Primary: {recipient_display} ({recipient_info['role']})")
+                
+                if signers and signers != ["Unknown"]:
+                    reasoning_parts.append(f"- Previous Signers: {', '.join(signers)} (may still be involved)")
+                
+                if crm_match:
+                    reasoning_parts.append(f"- CRM Owner: {crm_match.get('owner', 'Unknown')} (currently managing this opportunity)")
                 
                 reasoning_parts.append("")
                 reasoning_parts.append("RECOMMENDED ACTIONS:")
                 
-                # Format recipient display (use name if available, otherwise role)
-                recipient_display = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
-                
                 if crm_match:
                     owner = crm_match.get('owner', 'the account owner')
-                    reasoning_parts.extend([
-                        f"1. Contact {owner} TODAY to get status update",
-                        f"2. Review CRM notes: \"{crm_match.get('next_steps', 'None')}\"",
-                        f"3. Draft executive email to {recipient_display} ({recipient_info['role']}) addressing renewal urgency",
-                        f"4. Target resolution within 14 days",
-                    ])
+                    stage = crm_match.get('stage', 'Unknown')
+                    
+                    if stage == "Lost":
+                        reasoning_parts.extend([
+                            f"1. Contact {owner} to understand why deal was lost",
+                            f"2. Review loss reason: \"{crm_match.get('next_steps', 'None')}\"",
+                            f"3. Develop win-back strategy with management",
+                            f"4. Reach out to {recipient_display} with new value proposition",
+                        ])
+                    elif stage == "Won":
+                        reasoning_parts.extend([
+                            f"1. Contact {owner} to confirm renewal status",
+                            f"2. Verify if new contract has been signed",
+                            f"3. Update CRM with current contract status",
+                            f"4. Schedule follow-up meeting with {recipient_display}",
+                        ])
+                    else:  # Active engagement
+                        reasoning_parts.extend([
+                            f"1. Contact {owner} TODAY to get status update",
+                            f"2. Review CRM notes: \"{crm_match.get('next_steps', 'None')}\"",
+                            f"3. Draft executive email to {recipient_display} addressing renewal urgency",
+                            f"4. {'Discuss expansion opportunities' if expansion['can_expand'] else 'Focus on renewal at current scope'}",
+                            f"5. Target resolution within 14 days",
+                        ])
                 else:
                     reasoning_parts.extend([
-                        "1. Create CRM opportunity immediately to track this expired contract",
+                        "1. 🚨 Create CRM opportunity immediately to track this expired contract",
                         "2. Research customer contact and current relationship status",
-                        f"3. Draft outreach email to {recipient_display} ({recipient_info['role']}) to re-engage",
-                        "4. Escalate to management if no response within 7 days",
+                        f"3. Reach out to previous signers: {', '.join(signers)}",
+                        f"4. Draft outreach email to {recipient_display} to re-engage",
+                        "5. Escalate to management if no response within 7 days",
                     ])
                 
                 reasoning_parts.append("")

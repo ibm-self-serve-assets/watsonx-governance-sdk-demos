@@ -153,7 +153,7 @@ Output Structure:
 
 4. MATCHING AGENT (matching_agent.py)
 
-Purpose: Correlates contract data with CRM opportunities to find matches and gaps.
+Purpose: Correlates contract data with CRM opportunities to find matches and gaps, with enhanced renewal tracking and urgency analysis.
 
 Key Functions:
 
@@ -178,52 +178,64 @@ Simple explanation: Falls back to basic substring matching if AI model is unavai
 Example: "watsonx" in "Confluent watsonx ESA Renewal" → MATCHED
 
 _match_contracts_to_opportunities(contracts, opportunities)
-What it does: Main matching function that processes all contracts using LLM-based intelligent matching
-Simple explanation: Takes contracts and matches them to CRM opportunities using AI to understand nuanced relationships
-Example: Contract "watsonx-2025" matches CRM opportunity "Confluent watsonx as a Service" → LLM creates match with confidence score and reasoning
+What it does: Main matching function with ENHANCED renewal detection, CRM stage analysis, and urgency flags
+Simple explanation: Takes contracts and matches them to CRM opportunities using AI, PLUS calculates days until renewal, identifies renewal contracts, analyzes CRM stages, and flags critical gaps
+New Features:
+  - Calculates days_until_renewal for every contract
+  - Classifies renewal_urgency (EXPIRED, CRITICAL, HIGH, MEDIUM, LOW)
+  - Detects is_renewal from contract titles
+  - Analyzes CRM stages: Lost = FAILED, Won = CONTRACT SIGNED, Other = ACTIVE ENGAGEMENT
+  - Flags active_engagement status
+  - Generates urgent alerts for contracts without CRM tracking
+Example: Contract expired 68 days ago with NO CRM → Returns urgency_message: "🚨 URGENT: Contract EXPIRED 68 days ago with NO CRM tracking!"
 
 run(contract_portfolio, crm_opportunities)
-What it does: Main function that creates the correlation report
-Simple explanation: Compares all contracts to all CRM opportunities and creates lists of what matches and what doesn't
-Example: 4 contracts + 2 opportunities → Returns "2 matched, 2 unmatched contracts"
+What it does: Main function that creates the enhanced correlation report with renewal analysis
+Simple explanation: Compares all contracts to all CRM opportunities, calculates urgency, identifies gaps, and creates actionable alerts
+Example: 4 contracts + 2 opportunities → Returns "2 matched (1 active engagement), 2 unmatched (1 CRITICAL - expired without CRM)"
 
 Output Structure:
 {
   "matched_contracts": [
     {
-      "contract": {
-        "file_name": "Confluent_IBM-1.30.2025.docx",
-        "structured_summary": {
-          "amount": "$500,092.80",
-          "products": ["watsonx as a Service"],
-          "start_date": "2025-01-31",
-          "end_date": "2026-01-31"
-        },
-        "status": "expired",
-        "days_to_end": -68
-      },
-      "product": "watsonx",
-      "opportunities": [
-        {
-          "opportunity_name": "Confluent watsonx ESA Renewal",
-          "owner": "Anand Das",
-          "stage": "Qualified",
-          "amount": 250000,
-          "next_steps": "sizing in progress"
-        }
-      ],
+      "contract": {...},
+      "contract_product": "watsonx",
+      "contract_value": "$500,092.80",
+      "contract_end": "2026-01-31",
+      "contract_status": "expired",
+      "is_renewal": true,
+      "days_until_renewal": -68,
+      "renewal_urgency": "EXPIRED",
+      "opportunities": [{...}],
       "match_confidence": "high",
-      "match_reasoning": "LLM identified semantic match between 'watsonx ESA' and 'watsonx as a Service'. Dollar amounts align ($250K). Timeline proximity supports renewal scenario."
+      "match_reasoning": "LLM identified semantic match...",
+      "crm_stage": "Qualified",
+      "crm_stage_analysis": "ACTIVE ENGAGEMENT - Stage: Qualified",
+      "active_engagement": true,
+      "crm_owner": "Anand Das",
+      "crm_next_steps": "sizing in progress"
     }
   ],
-  "unmatched_contracts": [...]
+  "unmatched_contracts": [
+    {
+      "contract": {...},
+      "contract_product": "Cognos",
+      "contract_status": "expired",
+      "is_renewal": false,
+      "days_until_renewal": -800,
+      "renewal_urgency": "EXPIRED",
+      "reason": "No matching CRM opportunity found",
+      "urgency_message": "🚨 URGENT: Contract EXPIRED 800 days ago with NO CRM tracking!",
+      "action_required": "CREATE CRM OPPORTUNITY IMMEDIATELY"
+    }
+  ]
 }
 
 ================================================================================
 
 5. ACTION AGENT (action_agent.py)
 
-Purpose: Determines next best actions and creates seller artifacts (emails, CRM updates) with comprehensive reasoning.
+Purpose: Determines next best actions and creates seller artifacts (emails, CRM updates) with comprehensive reasoning, expansion analysis, and root cause investigation.
 
 Key Functions:
 
@@ -243,28 +255,56 @@ Simple explanation: Figures out if contract is for watsonx.ai, watsonx.governanc
 Example: "Confluent_IBM-1.30.2025.docx" → Returns ["watsonx Orchestrate", "watsonx.governance", "watsonx.ai"]
 
 extract_executive_info(partner_profile, role)
-What it does: Finds the actual name of the CPO, CTO, or CEO from research
-Simple explanation: Looks through research data to find executive names
-Example: Research contains "CPO: John Smith" → Returns {"name": "John Smith", "role": "CPO"}
+What it does: Finds the actual name of the CPO, CTO, or CEO from research, with HARD-CODED Confluent CPO
+Simple explanation: Looks through research data to find executive names, automatically returns "Shaun Clowes" for Confluent CPO
+Example: Confluent + CPO role → Returns {"name": "Shaun Clowes", "role": "CPO", "note": "Pre-acquisition executive"}
+Example: Other partner + CPO → Searches research data for CPO name
+
+extract_contract_signers(contract)
+What it does: NEW - Extracts previous contract signers and key people from contract parties
+Simple explanation: Identifies who signed the previous contract for follow-up outreach
+Example: Contract parties include "John Smith, Jane Doe" → Returns ["John Smith", "Jane Doe"]
+
+detect_expansion_opportunity(contract, crm_match)
+What it does: NEW - Analyzes if there's an upsell/expansion opportunity
+Simple explanation: Checks if CRM opportunity value is higher than contract, looks for expansion keywords, identifies single-product contracts
+Expansion Signals:
+  - CRM opportunity 20%+ higher than contract value
+  - "expand", "expansion", "upsell" in CRM next steps
+  - Customer actively sizing (potential for more)
+  - Single product contract (opportunity for complementary solutions)
+Example: Contract $250K, CRM opportunity $500K → Returns {"can_expand": true, "signals": ["CRM opportunity 100% higher"], "recommendation": "Explore expansion opportunities"}
+
+analyze_why_expired(contract, crm_match)
+What it does: NEW - Root cause analysis of why a contract expired
+Simple explanation: Investigates why contract expired - no outreach, lost deal, timing gap, or natural expiration
+Analysis Logic:
+  - No CRM match → "No one reached out - no proactive engagement"
+  - CRM stage "Lost" → "Deal was lost" with reason from next steps
+  - CRM stage "Won" → "Natural expiration after successful engagement"
+  - Active engagement → "Timing gap - discussions ongoing but contract lapsed"
+Example: Expired contract with no CRM → Returns {"primary_reason": "No proactive outreach", "action": "URGENT: Create CRM opportunity and reach out immediately"}
 
 determine_recipient(contract, crm_match, query, partner_profile)
 What it does: Decides who should receive the email based on context
 Simple explanation: Chooses CPO for renewals, CTO for technical products, CEO for critical situations
-Example: watsonx contract + renewal situation → Determines "CPO" → Extracts "John Smith" from research
+Example: watsonx contract + renewal situation → Determines "CPO" → Extracts "Shaun Clowes" for Confluent
 
 determine_action_node(state)
-What it does: Creates comprehensive analysis with contract details, CRM linkage, urgency, and risk
-Simple explanation: Builds complete reasoning that includes contract details, CRM information, urgency analysis, recommended actions, and business impact
+What it does: Creates ENHANCED comprehensive analysis with contract details, CRM linkage, urgency, expansion opportunities, and root cause analysis
+Simple explanation: Builds complete reasoning that includes contract details, CRM information, WHY contract expired, expansion opportunities, previous signers, key people to contact, and recommended actions
 
 Example Output:
 """
 CONTRACT: Confluent_IBM-1.30.2025.docx
 - Product(s): watsonx Orchestrate, watsonx.governance, watsonx.ai
 - Value: $500,092.80
+- Previous Signers: John Smith, Jane Doe
 - Status: EXPIRED (68 days ago)
 - End Date: 1/31/2026
 
 CRM LINKAGE:
+- ✅ CRM Status: ACTIVE ENGAGEMENT
 - Opportunity: "Confluent watsonx ESA Renewal"
 - Owner: Anand Das
 - Stage: Qualified
@@ -272,30 +312,48 @@ CRM LINKAGE:
 - Close Date: 6/30/2026
 - Next Steps: "sizing in progress"
 
+WHY DID THIS CONTRACT EXPIRE?
+- Primary Reason: Timing gap - active discussions but contract lapsed
+  🔄 Active engagement but contract expired during negotiations
+  ⏰ Timing issue - discussions ongoing but contract lapsed
+
+EXPANSION OPPORTUNITY ANALYSIS:
+- Can Expand: YES ✅
+- Signals:
+  • Customer actively sizing - potential for expansion
+  • CRM opportunity ($250,000) suggests continued investment
+- Recommendation: Explore expansion opportunities during renewal discussion
+
 URGENCY ANALYSIS:
 - Contract expired 68 days ago
 - $250,000 renewal opportunity at risk
 - Customer actively sizing - positive engagement signal
 - Competitor could enter during gap period
 
+KEY PEOPLE TO CONTACT:
+- Primary: Shaun Clowes (CPO) - Pre-acquisition executive (prior to IBM acquisition)
+- Previous Signers: John Smith, Jane Doe (may still be involved)
+- CRM Owner: Anand Das (currently managing this opportunity)
+
 RECOMMENDED ACTIONS:
 1. Contact Anand Das TODAY to get status update
 2. Review CRM notes: "sizing in progress"
-3. Draft executive email to John Smith (CPO) addressing renewal urgency
-4. Target resolution within 14 days
+3. Draft executive email to Shaun Clowes addressing renewal urgency
+4. Discuss expansion opportunities
+5. Target resolution within 14 days
 
 WHY THIS MATTERS:
 - $250,000 revenue at risk
 - Customer relationship continuity depends on quick action
 - Extended gap increases competitive vulnerability
-- May impact future expansion opportunities with this customer
+- Expansion opportunity available - could increase deal size
 """
 
 create_artifacts_node(state)
-What it does: Generates ready-to-send emails addressed to actual executives and updates CRM
-Simple explanation: Writes professional email with contract context and updates CRM with next steps
-Example: Creates email starting with "Dear John Smith," including specific contract details
-         Updates CRM with {"next_steps": ["Contact Anand Das TODAY", "Review sizing progress"]}
+What it does: Generates ready-to-send emails addressed to actual executives (including hard-coded Shaun Clowes for Confluent) and updates CRM
+Simple explanation: Writes professional email with contract context, expansion opportunities, and updates CRM with next steps
+Example: Creates email starting with "Dear Shaun Clowes," including specific contract details, expansion opportunities, and previous signers
+         Updates CRM with {"next_steps": ["Contact Anand Das TODAY", "Review sizing progress", "Discuss expansion opportunities"]}
 
 run(contract_summary, partner_profile, seller_query, matching_data)
 What it does: Main function that orchestrates all action determination
@@ -433,4 +491,4 @@ A: Ensure you're using the current version of action_agent.py which uses "next_s
 ================================================================================
 
 LAST UPDATED: 2026-04-09
-VERSION: 3.0
+VERSION: 4.0 - Enhanced with renewal tracking, CRM stage analysis, expansion detection, root cause analysis, and hard-coded Confluent CPO
