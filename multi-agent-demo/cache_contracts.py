@@ -31,10 +31,20 @@ DELAY_BETWEEN_CONTRACTS = 15  # Wait 15 seconds between LLM calls
 
 
 def extract_text_from_docx(file_path):
-    """Extract text from DOCX without using LLM"""
+    """Extract text from DOCX including tables"""
     try:
         doc = Document(file_path)
-        text = "\n".join([para.text for para in doc.paragraphs])
+        
+        # Extract paragraph text
+        text_parts = [para.text for para in doc.paragraphs]
+        
+        # Extract table text
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    text_parts.append(cell.text)
+        
+        text = "\n".join(text_parts)
         return text
     except Exception as e:
         print(f"  Error extracting from {file_path}: {e}")
@@ -55,10 +65,14 @@ def extract_text_from_pdf(file_path):
         return None
 
 
-def extract_structured_fields(text):
+def extract_structured_fields(text, filename=""):
     """
     Extract structured fields from contract text using regex (no LLM).
     This is a fast fallback that works without API calls.
+    
+    Args:
+        text: Contract text content
+        filename: Contract filename (used for fallback party extraction)
     """
     from dateutil.relativedelta import relativedelta
     from dateutil.parser import parse as parse_date
@@ -127,10 +141,22 @@ def extract_structured_fields(text):
     
     # Extract parties - ensure BOTH are captured
     parties = []
+    
+    # Check text for explicit mentions
     if "confluent" in text_lower:
         parties.append("Confluent")
     if "ibm" in text_lower:
         parties.append("IBM")
+    
+    # Fallback: Extract from filename if not found in text
+    # Filename format: "Confluent_IBM-X.XX.XXXX.docx"
+    if not parties or len(parties) < 2:
+        filename_lower = filename.lower() if filename else ""
+        if "confluent" in filename_lower and "Confluent" not in parties:
+            parties.insert(0, "Confluent")  # Insert at beginning
+        if "ibm" in filename_lower and "IBM" not in parties:
+            parties.append("IBM")
+    
     structured['parties'] = parties if parties else ["Unknown"]
     
     # Contract type
@@ -225,7 +251,7 @@ def process_contracts_batch(partner_name="Confluent", text_only=False):
                 
                 # Extract structured fields if not text-only mode
                 if not text_only:
-                    structured = extract_structured_fields(text)
+                    structured = extract_structured_fields(text, os.path.basename(file_path))
                     contract_data["structured_summary"] = structured
                     pbar.set_postfix({"amount": structured.get('amount', 'N/A')})
                 else:
