@@ -136,7 +136,7 @@ Status: {contract.get("status", "unknown")}
 Name: {opp.get('opportunity_name', 'Unknown')}
 Owner: {opp.get('owner', 'Unknown')}
 Products: {opp.get('products', 'Unknown')}
-Amount: ${opp.get('amount', 0):,.0f}
+Amount: {opp.get('amount', '$0')}
 Stage: {opp.get('stage', 'Unknown')}
 Next Steps: {opp.get('next_steps', 'None')}"""
             for i, opp in enumerate(opportunities)
@@ -497,7 +497,7 @@ Be thorough - consider semantic relationships, not just exact string matches."""
                             f"   {stage_emoji} Opportunity: {opp.get('opportunity_name', 'Unknown')}",
                             f"      Owner: {opp.get('owner', 'Unknown')}",
                             f"      Stage: {stage}",
-                            f"      Amount: ${opp.get('amount', 0):,.0f}",
+                            f"      Amount: {opp.get('amount', '$0')}",
                             f"      Next Steps: {opp.get('next_steps', 'None')}",
                         ])
             
