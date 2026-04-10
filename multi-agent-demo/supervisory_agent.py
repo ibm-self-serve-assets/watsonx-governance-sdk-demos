@@ -562,11 +562,19 @@ class SupervisoryAgent:
                     ])
                     
                     for i, opp in enumerate(opportunities, 1):
+                        # Format amount safely - handle both numeric and string values
+                        amount = opp.get('amount', 0)
+                        if isinstance(amount, (int, float)):
+                            amount_str = f"${amount:,.0f}"
+                        else:
+                            # Amount is already a string like "$1,000,000.00"
+                            amount_str = str(amount) if amount else "$0"
+                        
                         output_parts.extend([
                             f"{i}. {opp.get('opportunity_name', 'Unknown')}",
                             f"   Owner: {opp.get('owner', 'Unknown')}",
                             f"   Stage: {opp.get('stage', 'Unknown')}",
-                            f"   Amount: ${opp.get('amount', 0):,}",
+                            f"   Amount: {amount_str}",
                             f"   Close Date: {opp.get('close_date', 'Unknown')}",
                             f"   Products: {opp.get('products', 'Unknown')}",
                             f"   Next Steps: {opp.get('next_steps', 'None specified')}",
