@@ -160,8 +160,20 @@ class ActionAgent:
                 if isinstance(step, str) and step.strip():
                     next_steps_analysis.append(step)
         
-        # Calculate average time to close for won deals
-        avg_deal_size = won_deals['Amount'].mean() if 'Amount' in won_deals.columns else 0
+        # Calculate average deal size for won deals
+        # Clean amount strings (remove $, commas, spaces) and convert to float
+        avg_deal_size = 0
+        if 'Amount' in won_deals.columns:
+            try:
+                # Clean the Amount column: remove $, commas, and extra spaces
+                cleaned_amounts = won_deals['Amount'].astype(str).str.replace('$', '').str.replace(',', '').str.strip()
+                # Convert to numeric, coercing errors to NaN
+                numeric_amounts = pd.to_numeric(cleaned_amounts, errors='coerce')
+                # Calculate mean, ignoring NaN values
+                avg_deal_size = numeric_amounts.mean() if not numeric_amounts.isna().all() else 0
+            except Exception as e:
+                print(f"Warning: Could not calculate average deal size: {e}")
+                avg_deal_size = 0
         
         # Identify most successful products
         product_success = {}
@@ -452,8 +464,11 @@ class ActionAgent:
                 contract_value = extract_contract_value(contract)
                 if crm_match and isinstance(contract_value, (int, float)):
                     crm_amount = crm_match.get("amount", 0)
+                    # Format amounts safely for display
                     if isinstance(crm_amount, (int, float)) and crm_amount > contract_value * 1.2:
-                        expansion_signals.append(f"CRM opportunity (${crm_amount:,.0f}) is 20%+ higher than contract value (${contract_value:,.0f})")
+                        crm_amt_str = f"${crm_amount:,.0f}" if isinstance(crm_amount, (int, float)) else str(crm_amount)
+                        contract_val_str = f"${contract_value:,.0f}" if isinstance(contract_value, (int, float)) else str(contract_value)
+                        expansion_signals.append(f"CRM opportunity ({crm_amt_str}) is 20%+ higher than contract value ({contract_val_str})")
                         can_expand = True
                 
                 # Check for expansion keywords in CRM next steps
@@ -589,7 +604,7 @@ class ActionAgent:
                         f"- Opportunity: \"{crm_match.get('opportunity_name', 'Unknown')}\"",
                         f"- Owner: {crm_match.get('owner', 'Unknown')}",
                         f"- Stage: {stage}",
-                        f"- Amount: ${crm_match.get('amount', 0):,.0f}",
+                        f"- Amount: {crm_match.get('amount', '$0')}",
                         f"- Close Date: {crm_match.get('close_date', 'Unknown')}",
                         f"- Next Steps: \"{crm_match.get('next_steps', 'None')}\"",
                     ])
@@ -737,7 +752,7 @@ class ActionAgent:
                         f"- Opportunity: \"{crm_match.get('opportunity_name', 'Unknown')}\"",
                         f"- Owner: {crm_match.get('owner', 'Unknown')}",
                         f"- Stage: {crm_match.get('stage', 'Unknown')}",
-                        f"- Amount: ${crm_match.get('amount', 0):,.0f}",
+                        f"- Amount: {crm_match.get('amount', '$0')}",
                         f"- Next Steps: \"{crm_match.get('next_steps', 'None')}\"",
                     ])
                 else:
@@ -1130,7 +1145,7 @@ class ActionAgent:
                 "-" * 80,
                 f"Pattern Confidence: {historical_patterns.get('pattern_confidence', 'Unknown')}",
                 f"Based on {historical_patterns.get('total_won_deals', 0)} won deals",
-                f"Average Deal Size: ${historical_patterns.get('average_deal_size', 0):,.0f}",
+                f"Average Deal Size: ${historical_patterns.get('average_deal_size', 0):,.0f}" if isinstance(historical_patterns.get('average_deal_size', 0), (int, float)) else f"Average Deal Size: {historical_patterns.get('average_deal_size', '$0')}",
                 "",
                 "CRM UPDATE STATUS:",
                 "-" * 80,
