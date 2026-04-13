@@ -597,7 +597,7 @@ class SupervisoryAgent:
                         output_parts.append("MATCHED CONTRACTS:")
                         for match in matched:
                             contract_file = match.get("contract", {}).get("file_name", "Unknown")
-                            product = match.get("product", "Unknown")
+                            product = match.get("contract_product", "Unknown")
                             opps = match.get("opportunities", [])
                             
                             output_parts.append(f"\n  • {contract_file} ({product})")
@@ -613,7 +613,7 @@ class SupervisoryAgent:
                         output_parts.append("UNMATCHED CONTRACTS (No CRM Entry):")
                         for unmatch in unmatched:
                             contract_file = unmatch.get("contract", {}).get("file_name", "Unknown")
-                            product = unmatch.get("product", "Unknown")
+                            product = unmatch.get("contract_product", "Unknown")
                             output_parts.append(f"  • {contract_file} ({product})")
                         output_parts.append("")
                 
