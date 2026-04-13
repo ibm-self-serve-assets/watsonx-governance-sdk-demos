@@ -280,18 +280,14 @@ class ContractAgent:
             
             # Not in cache - read from file
             try:
-                print(f"DEBUG: Reading document from: {file_path}")
                 raw_text = self._read_document(file_path)
-                print(f"DEBUG: Extracted {len(raw_text) if raw_text else 0} characters")
                 
                 if not raw_text or len(raw_text.strip()) == 0:
-                    print(f"DEBUG: Document appears empty!")
                     return {
                         "raw_text": None,
                         "messages": [f"Warning: Document appears empty or could not extract text from {file_path}"]
                     }
                 
-                print(f"DEBUG: Returning raw_text with {len(raw_text)} characters")
                 return {
                     "raw_text": raw_text,
                     "messages": [f"Document read successfully: {len(raw_text)} characters"]
@@ -299,8 +295,6 @@ class ContractAgent:
             except Exception as e:
                 import traceback
                 error_details = traceback.format_exc()
-                print(f"DEBUG: Error reading document: {str(e)}")
-                print(error_details)
                 return {
                     "raw_text": None,
                     "messages": [f"Error reading document: {str(e)}\n{error_details}"]

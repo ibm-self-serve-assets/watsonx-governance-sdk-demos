@@ -56,8 +56,6 @@ def _load_sales_df() -> pd.DataFrame:
         df = df.iloc[:, 1:]
 
     df.columns = df.columns.str.strip()
-    print(f"DEBUG - Final column names: {df.columns.tolist()}")
-    print(f"DEBUG - First few rows:\n{df.head(2)}")
     return df
 
 
@@ -70,16 +68,23 @@ def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner com
     try:
         df = _load_sales_df()
 
-        mask = (
-            df['Opportunity Name'].astype(str).str.contains(partner_name, case=False, na=False) |
-            df['Next Steps'].astype(str).str.contains(partner_name, case=False, na=False) |
-            df['Products'].astype(str).str.contains(partner_name, case=False, na=False)
-        )
-        partner_data = df[mask]
-
-        if partner_data.empty and partner_name.lower() != 'confluent':
-            mask = df.apply(lambda row: row.astype(str).str.contains(partner_name, case=False, na=False).any(), axis=1)
+        # Special handling for Confluent: since this is the Confluent sales file,
+        # ALL rows are Confluent opportunities, even if "Confluent" isn't in the name
+        if partner_name.lower() == 'confluent':
+            partner_data = df
+        else:
+            # For other partners, search across key columns
+            mask = (
+                df['Opportunity Name'].astype(str).str.contains(partner_name, case=False, na=False) |
+                df['Next Steps'].astype(str).str.contains(partner_name, case=False, na=False) |
+                df['Products'].astype(str).str.contains(partner_name, case=False, na=False)
+            )
             partner_data = df[mask]
+
+            # If still empty, search all columns
+            if partner_data.empty:
+                mask = df.apply(lambda row: row.astype(str).str.contains(partner_name, case=False, na=False).any(), axis=1)
+                partner_data = df[mask]
 
         if partner_data.empty:
             return {
@@ -156,8 +161,14 @@ def get_recent_and_upcoming_contract_actions(partner_name: Annotated[str, "Name 
     """
     try:
         df = _load_sales_df()
-        mask = df['Opportunity Name'].astype(str).str.contains(partner_name, case=False, na=False)
-        partner_data = df[mask] if partner_name.lower() != "confluent" else df[df['Opportunity Name'].astype(str).str.contains("Confluent", case=False, na=False)]
+        
+        # Special handling for Confluent: since this is the Confluent sales file,
+        # ALL rows are Confluent opportunities
+        if partner_name.lower() == 'confluent':
+            partner_data = df
+        else:
+            mask = df['Opportunity Name'].astype(str).str.contains(partner_name, case=False, na=False)
+            partner_data = df[mask]
 
         action_flags = []
         for _, row in partner_data.iterrows():

@@ -228,9 +228,9 @@ class SupervisoryAgent:
             if not partner_name and state.get("partner_name"):
                 partner_name = state["partner_name"]
             
-            print(f"\nIntent Analysis:")
-            print(intent_data.get('raw_interpretation', 'No interpretation'))
-            print(f"\nRequired Agents: {', '.join(required_agents)}")
+            # Consolidated intent analysis output - show only once, concisely
+            print(f"\nWorkflow Type: {workflow_type}")
+            print(f"Required Agents: {', '.join(required_agents)}")
             print(f"Partner Name: {partner_name or 'To be extracted from contract'}")
             
             return {
@@ -327,10 +327,6 @@ class SupervisoryAgent:
             contract_summary = state.get("contract_summary", {})
             partner_profile = state.get("partner_profile", {})
             
-            print(f"\nDEBUG - Supervisory Agent passing to Matching Agent:")
-            print(f"  contract_summary keys: {list(contract_summary.keys()) if contract_summary else 'None'}")
-            print(f"  partner_profile keys: {list(partner_profile.keys()) if partner_profile else 'None'}")
-            
             if not contract_summary:
                 return {
                     "matching_data": {"error": "Missing contract context"},
@@ -347,14 +343,7 @@ class SupervisoryAgent:
                 internal_data = partner_profile.get("internal_data", {})
                 sales_history = internal_data.get("sales_history", {})
                 
-                print(f"DEBUG - internal_data keys: {list(internal_data.keys()) if internal_data else 'None'}")
-                print(f"DEBUG - sales_history keys: {list(sales_history.keys()) if sales_history else 'None'}")
-                
                 crm_opportunities = sales_history.get("opportunities", [])
-                print(f"DEBUG - CRM opportunities extracted: {len(crm_opportunities)}")
-                
-                if crm_opportunities and len(crm_opportunities) > 0:
-                    print(f"DEBUG - First opportunity keys: {list(crm_opportunities[0].keys())}")
                 
                 # Run Matching Agent
                 result = self.matching_agent.run(

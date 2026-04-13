@@ -391,10 +391,6 @@ Now analyze and respond:"""
             portfolio = state.get("contract_portfolio", {})
             opportunities = state.get("crm_opportunities", [])
             
-            print(f"\nDEBUG - Matching Agent:")
-            print(f"  Portfolio keys: {list(portfolio.keys())}")
-            print(f"  Opportunities count: {len(opportunities)}")
-            
             # Get contracts from portfolio
             portfolio_summary = portfolio.get("portfolio_summary", {})
             all_contracts = []
@@ -402,7 +398,6 @@ Now analyze and respond:"""
             
             # Include active contracts
             active = portfolio_summary.get("active_contracts", [])
-            print(f"  Active contracts: {len(active)}")
             for contract in active:
                 file_path = contract.get("file_path", "")
                 if file_path and file_path not in seen_files:
@@ -411,7 +406,6 @@ Now analyze and respond:"""
             
             # Include renewal candidates (skip if already added as active)
             renewal = portfolio_summary.get("renewal_candidates", [])
-            print(f"  Renewal candidates: {len(renewal)}")
             for contract in renewal:
                 file_path = contract.get("file_path", "")
                 if file_path and file_path not in seen_files:
@@ -420,17 +414,11 @@ Now analyze and respond:"""
             
             # Include recently expired
             expired = portfolio_summary.get("recently_expired_contracts", [])
-            print(f"  Recently expired: {len(expired)}")
             for contract in expired:
                 file_path = contract.get("file_path", "")
                 if file_path and file_path not in seen_files:
                     all_contracts.append(contract)
                     seen_files.add(file_path)
-            
-            print(f"  Total contracts to match: {len(all_contracts)}")
-            
-            if all_contracts and len(all_contracts) > 0:
-                print(f"  Sample contract keys: {list(all_contracts[0].keys())}")
             
             # Perform matching
             matched, unmatched = self._match_contracts_to_opportunities(
