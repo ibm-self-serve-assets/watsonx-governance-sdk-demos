@@ -7,3 +7,6 @@ rag_agent_demo.egg-info
 evaluate_metrics.egg-info
 *.egg-info
 wxgov_traces
+__pycache__/
+*.py[cod]
+*$py.class
