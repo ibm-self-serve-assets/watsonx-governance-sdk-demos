@@ -512,11 +512,21 @@ class ActionAgent:
                 # Guard: if Confluent, skip any Tavily result that contains IBM-era
                 # executive names to avoid surfacing post-acquisition IBM leadership.
                 IBM_EXEC_NAMES = {"arvind krishna", "jim kavanaugh", "gary cohn"}
+                
+                # Filter out common title words that might be mistaken for names
+                TITLE_WORDS = {"chief", "financial", "technology", "product", "executive",
+                               "officer", "procurement", "operating", "information", "marketing",
+                               "sales", "human", "resources", "legal", "compliance"}
 
                 for pattern in patterns.get(role, []):
                     match = re.search(pattern, exec_data)
                     if match:
                         found_name = match.group(1)
+                        # Check if this is actually a title, not a name
+                        name_words = found_name.lower().split()
+                        if any(word in TITLE_WORDS for word in name_words):
+                            # This is a title (e.g., "Chief Financial"), not a name - skip it
+                            continue
                         if is_confluent and found_name.lower() in IBM_EXEC_NAMES:
                             # Skip IBM executive — fall through to hard-coded data
                             continue
@@ -783,12 +793,16 @@ class ActionAgent:
                 reasoning_parts.append("")
                 reasoning_parts.append("KEY PEOPLE TO CONTACT:")
                 
-                # Format recipient display (use name if available, otherwise role)
-                recipient_display = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
-                if recipient_info.get("note"):
-                    reasoning_parts.append(f"- Primary: {recipient_display} ({recipient_info['role']}) - {recipient_info['note']}")
+                # Format recipient display - always show name if available, with role in parentheses
+                if recipient_info["name"]:
+                    recipient_display = f"{recipient_info['name']} ({recipient_info['role']})"
                 else:
-                    reasoning_parts.append(f"- Primary: {recipient_display} ({recipient_info['role']})")
+                    recipient_display = recipient_info['role']
+                
+                if recipient_info.get("note"):
+                    reasoning_parts.append(f"- Primary: {recipient_display} - {recipient_info['note']}")
+                else:
+                    reasoning_parts.append(f"- Primary: {recipient_display}")
                 
                 if signers and signers != ["Unknown"]:
                     reasoning_parts.append(f"- Previous Signers: {', '.join(signers)} (may still be involved)")
@@ -1153,7 +1167,14 @@ class ActionAgent:
 
             recipient_name_str = recipient_info["name"] if recipient_info["name"] else None
             recipient_role_str = recipient_info["role"]
-            greeting           = recipient_name_str if recipient_name_str else recipient_role_str
+            
+            # Extract first name only for greeting
+            if recipient_name_str:
+                first_name = recipient_name_str.split()[0]  # Get first word (first name)
+                greeting = first_name
+            else:
+                greeting = recipient_role_str
+            
             recipient_display  = recipient_name_str if recipient_name_str else recipient_role_str
 
             # ---- Build a tightly-scoped CRM next-steps guidance block ------
@@ -1194,7 +1215,7 @@ class ActionAgent:
                 "════════════════════════════════════════════\n\n"
                 "WRITING RULES — follow every one:\n"
                 "1. Output EXACTLY ONE email. No alternatives, no commentary, no markdown fences.\n"
-                "2. Open with 'Subject:' on the first line, blank line, then 'Dear {greeting},'.\n"
+                "2. Open with 'Subject:' on the first line, blank line, then 'Dear {greeting},' (use ONLY the first name provided, never full name or title).\n"
                 "3. Write 2–3 short paragraphs (total 150–200 words):\n"
                 "   • Para 1 – What you are reaching out about (contract, product, timing).\n"
                 "   • Para 2 – Address the CRM next steps directly and concretely.\n"
