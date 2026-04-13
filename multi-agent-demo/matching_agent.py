@@ -138,6 +138,8 @@ Owner: {opp.get('owner', 'Unknown')}
 Products: {opp.get('products', 'Unknown')}
 Amount: {opp.get('amount', '$0')}
 Stage: {opp.get('stage', 'Unknown')}
+Close Date: {opp.get('close_date', 'Unknown')}
+Contract Expiration Date: {opp.get('contract_expiration_date', 'N/A')}
 Next Steps: {opp.get('next_steps', 'None')}"""
             for i, opp in enumerate(opportunities)
         ])
@@ -156,27 +158,32 @@ Next Steps: {opp.get('next_steps', 'None')}"""
         )
         
         # Matching prompt
-        prompt = f"""You are a contract-CRM matching expert. Analyze this contract and determine which CRM opportunities (if any) are related to it.
+        prompt = f"""Analyze this contract and identify which CRM opportunities match it.
 
-CONTRACT INFORMATION:
+CONTRACT:
 {contract_info}
 
 CRM OPPORTUNITIES:
 {opp_info}
 
-MATCHING CRITERIA:
-1. Product/service alignment (e.g., "watsonx ESA" matches "watsonx as a Service", "Cognos" matches "Cognos Analytics")
-2. Dollar amount proximity (within reasonable range)
-3. Timeline alignment (contract dates vs opportunity close dates)
-4. Semantic relationships (understand product families and variations)
+MATCHING RULES:
 
-Provide your analysis in this EXACT format:
+1. For EXPIRED contracts: Look for ACTIVE opportunities (Stage=Qualify/Design/Engage/Negotiate) with:
+   - Same/similar products
+   - Similar dollar amounts (within 7%)
+   - Next Steps mentioning "renewal", "expired", or "renew"
 
-MATCHED_OPPORTUNITIES: [comma-separated list of opportunity numbers that match, or "NONE"]
-CONFIDENCE: [high/medium/low]
-REASONING: [Brief explanation of why these opportunities match or don't match]
+2. For ACTIVE contracts: Look for opportunities with:
+   - Contract Expiration Date matching the contract's End Date
+   - Same products and amounts
 
-Be thorough - consider semantic relationships, not just exact string matches."""
+RESPOND IN THIS EXACT FORMAT (fill in all fields):
+
+MATCHED_OPPORTUNITIES: [list numbers like "1, 6", the Opportunity Name, or write "NONE"]
+CONFIDENCE: [write "high", "medium", or "low"]
+REASONING: [explain your decision in 1-2 sentences]
+
+Now analyze and respond:"""
 
         try:
             response = llm.invoke(prompt)
@@ -391,21 +398,34 @@ Be thorough - consider semantic relationships, not just exact string matches."""
             # Get contracts from portfolio
             portfolio_summary = portfolio.get("portfolio_summary", {})
             all_contracts = []
+            seen_files = set()
             
             # Include active contracts
             active = portfolio_summary.get("active_contracts", [])
             print(f"  Active contracts: {len(active)}")
-            all_contracts.extend(active)
+            for contract in active:
+                file_path = contract.get("file_path", "")
+                if file_path and file_path not in seen_files:
+                    all_contracts.append(contract)
+                    seen_files.add(file_path)
             
-            # Include renewal candidates
+            # Include renewal candidates (skip if already added as active)
             renewal = portfolio_summary.get("renewal_candidates", [])
             print(f"  Renewal candidates: {len(renewal)}")
-            all_contracts.extend(renewal)
+            for contract in renewal:
+                file_path = contract.get("file_path", "")
+                if file_path and file_path not in seen_files:
+                    all_contracts.append(contract)
+                    seen_files.add(file_path)
             
             # Include recently expired
             expired = portfolio_summary.get("recently_expired_contracts", [])
             print(f"  Recently expired: {len(expired)}")
-            all_contracts.extend(expired)
+            for contract in expired:
+                file_path = contract.get("file_path", "")
+                if file_path and file_path not in seen_files:
+                    all_contracts.append(contract)
+                    seen_files.add(file_path)
             
             print(f"  Total contracts to match: {len(all_contracts)}")
             
