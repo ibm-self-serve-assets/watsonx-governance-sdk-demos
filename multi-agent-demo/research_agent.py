@@ -382,10 +382,48 @@ def synthesize_profile_node(state: ResearchState) -> dict:
     partner_name = state["partner_name"]
     internal_data = state.get("internal_data", {})
     external_data = state.get("external_data", {})
-    
+
+    # ------------------------------------------------------------------
+    # HARD-CODED: Confluent pre-acquisition executive roster.
+    # Tavily frequently surfaces IBM executives instead of the Confluent
+    # leadership team that was in place before the acquisition.  We inject
+    # the known executive data here so that downstream agents always have
+    # reliable names for CPO / CTO / CFO / CEO outreach.
+    # ------------------------------------------------------------------
+    CONFLUENT_KNOWN_EXECUTIVES = {
+        "CPO": {"name": "Shaun Clowes", "title": "Chief Product Officer (CPO)", "note": "Pre-acquisition"},
+        "CTO": {"name": "Stephen Deasy", "title": "Chief Technology Officer (CTO)", "note": "Pre-acquisition"},
+        "CFO": {"name": "Rohan Sivaram", "title": "Chief Financial Officer (CFO)", "note": "Pre-acquisition"},
+        "CEO": {"name": "Jay Kreps", "title": "Chief Executive Officer (CEO) & Co-Founder", "note": "Pre-acquisition"},
+    }
+
+    if "confluent" in partner_name.lower():
+        # Build a human-readable block for the LLM prompt and for
+        # the external_data dict so action_agent can also consume it.
+        exec_lines = [
+            f"{info['title']}: {info['name']} ({info['note']})"
+            for info in CONFLUENT_KNOWN_EXECUTIVES.values()
+        ]
+        hardcoded_exec_text = (
+            "HARD-CODED PRE-ACQUISITION CONFLUENT EXECUTIVES "
+            "(use these when Tavily search is unreliable):\n" +
+            "\n".join(exec_lines)
+        )
+
+        # Merge into external_data so the action_agent's extract_executive_info
+        # regex can optionally find them (belt-and-suspenders — action_agent
+        # also has its own hard-coded lookup as the primary fallback).
+        existing_exec = external_data.get("executives", "") or ""
+        if isinstance(existing_exec, str):
+            external_data = dict(external_data)  # shallow copy before mutating
+            external_data["executives"] = hardcoded_exec_text + "\n\n" + existing_exec
+            external_data["known_confluent_executives"] = CONFLUENT_KNOWN_EXECUTIVES
+        
+        print("INFO: Confluent pre-acquisition executive data injected into partner profile.")
+
     # Prepare synthesis prompt using Watsonx
     from langchain_ibm import WatsonxLLM
-    
+
     llm = WatsonxLLM(
         model_id="meta-llama/llama-3-3-70b-instruct",
         url="https://us-south.ml.cloud.ibm.com",
@@ -396,7 +434,7 @@ def synthesize_profile_node(state: ResearchState) -> dict:
             "temperature": 0.1,
         }
     )
-    
+
     prompt = f"""You are a sales intelligence analyst. Synthesize the internal sales data and external research into a comprehensive partner profile.
 
 Focus on:
@@ -417,9 +455,9 @@ EXTERNAL RESEARCH:
 {external_data}
 
 Synthesize this information into an enriched partner profile:"""
-    
+
     response = llm.invoke(prompt)
-    
+
     # Create enriched profile
     enriched_profile = {
         "partner_name": partner_name,
@@ -431,7 +469,7 @@ Synthesize this information into an enriched partner profile:"""
         "internal_data": internal_data,
         "external_data": external_data
     }
-    
+
     return {"enriched_profile": enriched_profile}
 
 
