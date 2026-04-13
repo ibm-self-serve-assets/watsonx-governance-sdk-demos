@@ -258,10 +258,13 @@ class ActionAgent:
     def _extract_first_email(self, text: str) -> str:
         """
         Extract only the first complete email from LLM output.
-        Handles cases where LLM generates multiple versions.
+        Handles cases where LLM generates multiple versions, markdown fences, and preamble text.
         """
-        # If text is short or doesn't have duplicates, return as-is
-        if len(text) < 500:
+        # Remove markdown code fences if present
+        text = text.replace("```", "").strip()
+        
+        # If text is short, return as-is
+        if len(text) < 100:
             return text.strip()
         
         # Find the first "Subject:" line
@@ -276,21 +279,81 @@ class ActionAgent:
             # No signature found, return everything from subject onwards
             return text[subject_idx:].strip()
         
-        # Look ahead to see if there's a duplicate email
-        end_idx = signature_idx + len("IBM Seller") + 50  # Add buffer for newlines
+        # Find the end of the signature line (look for newline after "IBM Seller")
+        end_of_signature = signature_idx + len("IBM Seller")
+        newline_after_sig = text.find("\n", end_of_signature)
         
-        # Check if there's another "Subject:" after this (indicating duplicate)
-        next_subject = text.find("Subject:", signature_idx + 10)
-        
-        if next_subject != -1 and next_subject < len(text) - 100:
-            # There's a duplicate - only take the first email
-            first_email = text[subject_idx:end_idx].strip()
-            print(f"DEBUG: Removed duplicate email (found second Subject at position {next_subject})")
+        if newline_after_sig != -1:
+            end_idx = newline_after_sig
         else:
-            # No duplicate detected - return full text from subject onwards
-            first_email = text[subject_idx:].strip()
+            end_idx = end_of_signature
+        
+        # Extract the first email
+        first_email = text[subject_idx:end_idx].strip()
+        
+        # Check if there's duplicate content after this (like "Here is the rewritten response:" or another "Subject:")
+        remaining_text = text[end_idx:].strip()
+        
+        # Look for common preamble phrases that indicate duplicate/extra content
+        duplicate_indicators = [
+            "Here is the rewritten",
+            "Here is the edited",
+            "Subject:",
+            "Dear ",
+        ]
+        
+        # If we find any duplicate indicators in the remaining text within the first 200 chars,
+        # we know we extracted correctly and should ignore the rest
+        if remaining_text and len(remaining_text) > 10:
+            for indicator in duplicate_indicators:
+                if indicator in remaining_text[:200]:
+                    # Duplicate detected, we're good with what we extracted
+                    break
         
         return first_email
+    
+    def _extract_contract_value(self, contract):
+        """Extract contract value from structured summary"""
+        structured = contract.get("structured_summary", {})
+        return structured.get("amount") if isinstance(structured, dict) else "Unknown"
+    
+    def _extract_products(self, contract):
+        """Extract product names from contract structured data or filename"""
+        # First try to get products from structured_summary (already extracted by contract agent)
+        structured = contract.get("structured_summary", {})
+        if isinstance(structured, dict):
+            products = structured.get("products", [])
+            if products and products != ["Unknown"]:
+                return products
+        
+        # Fallback: parse from filename if structured data unavailable
+        fn = contract.get("file_name", "").lower()
+        products = []
+        if "cognos" in fn:
+            products.append("Cognos")
+        if "watsonx" in fn:
+            if "orchestrate" in fn:
+                products.append("watsonx Orchestrate")
+            if "governance" in fn:
+                products.append("watsonx.governance")
+            if "data" in fn:
+                products.append("watsonx.data")
+            if "ai" in fn or not products:
+                products.append("watsonx.ai" if "ai" in fn else "watsonx ESA")
+        
+        # Return products or indicate they need to be extracted
+        return products if products else ["Products not yet extracted - run cache_contracts.py"]
+    
+    def _find_matching_data_for_contract(self, contract, matched_contracts_list):
+        """Find the matching data for a specific contract from Matching Agent output"""
+        contract_filename = contract.get("file_name", "")
+        for match in matched_contracts_list:
+            match_contract = match.get("contract", {})
+            if match_contract.get("file_name") == contract_filename:
+                # Return the first opportunity from the match
+                opportunities = match.get("opportunities", [])
+                return opportunities[0] if opportunities else None
+        return None
     
     def build_agent(self):
         """Build the LangGraph for action determination"""
@@ -363,81 +426,115 @@ class ActionAgent:
                 except:
                     return None
             
-            def extract_contract_value(contract):
-                """Extract contract value from structured summary"""
-                structured = contract.get("structured_summary", {})
-                return structured.get("amount") if isinstance(structured, dict) else "Unknown"
-            
-            def extract_products(contract):
-                """Extract product names from contract structured data or filename"""
-                # First try to get products from structured_summary (already extracted by contract agent)
-                structured = contract.get("structured_summary", {})
-                if isinstance(structured, dict):
-                    products = structured.get("products", [])
-                    if products and products != ["Unknown"]:
-                        return products
-                
-                # Fallback: parse from filename if structured data unavailable
-                fn = contract.get("file_name", "").lower()
-                products = []
-                if "cognos" in fn:
-                    products.append("Cognos")
-                if "watsonx" in fn:
-                    if "orchestrate" in fn:
-                        products.append("watsonx Orchestrate")
-                    if "governance" in fn:
-                        products.append("watsonx.governance")
-                    if "data" in fn:
-                        products.append("watsonx.data")
-                    if "ai" in fn or not products:
-                        products.append("watsonx.ai" if "ai" in fn else "watsonx ESA")
-                
-                # Return products or indicate they need to be extracted
-                return products if products else ["Products not yet extracted - run cache_contracts.py"]
             
             def extract_executive_info(partner_profile, role):
                 """
                 Extract executive name from research data.
-                HARD-CODED: Confluent CPO prior to acquisition = Shaun Clowes
+
+                HARD-CODED FALLBACKS for Confluent (pre-IBM acquisition):
+                  - CPO : Shaun Clowes  (Chief Product Officer)
+                  - CTO : Stephen Deasy (Chief Technology Officer)
+                  - CFO : Rohan Sivaram (Chief Financial Officer)
+                  - CEO : Jay Kreps (Chief Executive Officer / Co-Founder)
+
+                These are used when Tavily cannot reliably surface the data because
+                Confluent is now an IBM entity and public search results surface IBM
+                executives instead.  If Tavily does successfully return a name for the
+                requested role that name will take precedence.
                 """
                 import re
-                
-                # HARD-CODED: Confluent CPO prior to IBM acquisition
-                partner_name = partner_profile.get("partner_name", "").lower()
-                if "confluent" in partner_name and role == "CPO":
-                    return {
+
+                # ----------------------------------------------------------------
+                # HARD-CODED: Confluent pre-acquisition executive roster
+                # Used as the authoritative fallback when Tavily search fails.
+                # ----------------------------------------------------------------
+                CONFLUENT_EXECUTIVES = {
+                    "CPO": {
                         "name": "Shaun Clowes",
                         "title": "Chief Product Officer (CPO)",
                         "role": "CPO",
-                        "note": "Pre-acquisition executive (prior to IBM acquisition)"
-                    }
-                
+                        "note": "Pre-acquisition Confluent executive (prior to IBM acquisition)"
+                    },
+                    "CTO": {
+                        "name": "Stephen Deasy",
+                        "title": "Chief Technology Officer (CTO)",
+                        "role": "CTO",
+                        "note": "Pre-acquisition Confluent executive (prior to IBM acquisition)"
+                    },
+                    "CFO": {
+                        "name": "Rohan Sivaram",
+                        "title": "Chief Financial Officer (CFO)",
+                        "role": "CFO",
+                        "note": "Pre-acquisition Confluent executive (prior to IBM acquisition)"
+                    },
+                    "CEO": {
+                        "name": "Jay Kreps",
+                        "title": "Chief Executive Officer (CEO) & Co-Founder",
+                        "role": "CEO",
+                        "note": "Pre-acquisition Confluent executive / Co-Founder (prior to IBM acquisition)"
+                    },
+                }
+
+                partner_name_lower = partner_profile.get("partner_name", "").lower()
+                is_confluent = "confluent" in partner_name_lower
+
+                # ------------------------------------------------------------------
+                # Step 1: Try to extract from Tavily / research-agent external data.
+                # ------------------------------------------------------------------
                 exec_data = partner_profile.get("external_data", {}).get("executives", "")
-                
-                # Ensure exec_data is a string (handle case where it might be a dict or other type)
                 if not isinstance(exec_data, str):
                     exec_data = str(exec_data) if exec_data else ""
-                
+
                 patterns = {
-                    "CPO": [r'CPO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'Chief\s+Procurement\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CPO'],
-                    "CTO": [r'CTO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'Chief\s+Technology\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CTO'],
-                    "CEO": [r'CEO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'Chief\s+Executive\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)', r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CEO']
+                    "CPO": [
+                        r'CPO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'Chief\s+Product\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'Chief\s+Procurement\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CPO',
+                    ],
+                    "CTO": [
+                        r'CTO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'Chief\s+Technology\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CTO',
+                    ],
+                    "CFO": [
+                        r'CFO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'Chief\s+Financial\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CFO',
+                    ],
+                    "CEO": [
+                        r'CEO[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'Chief\s+Executive\s+Officer[:\s]+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+                        r'([A-Z][a-z]+\s+[A-Z][a-z]+)[,\s]+CEO',
+                    ],
                 }
+
+                # Guard: if Confluent, skip any Tavily result that contains IBM-era
+                # executive names to avoid surfacing post-acquisition IBM leadership.
+                IBM_EXEC_NAMES = {"arvind krishna", "jim kavanaugh", "gary cohn"}
+
                 for pattern in patterns.get(role, []):
-                    if match := re.search(pattern, exec_data):
-                        return {"name": match.group(1), "title": role, "role": role}
+                    match = re.search(pattern, exec_data)
+                    if match:
+                        found_name = match.group(1)
+                        if is_confluent and found_name.lower() in IBM_EXEC_NAMES:
+                            # Skip IBM executive — fall through to hard-coded data
+                            continue
+                        return {"name": found_name, "title": role, "role": role}
+
+                # ------------------------------------------------------------------
+                # Step 2: Tavily did not return a usable result — use hard-coded data.
+                # ------------------------------------------------------------------
+                if is_confluent and role in CONFLUENT_EXECUTIVES:
+                    print(f"INFO: Using hard-coded Confluent executive for role {role} "
+                          f"(Tavily search did not return reliable pre-acquisition data).")
+                    return CONFLUENT_EXECUTIVES[role]
+
+                # ------------------------------------------------------------------
+                # Step 3: No data available — return role-only placeholder.
+                # ------------------------------------------------------------------
                 return {"name": None, "title": role, "role": role}
             
-            def find_matching_data_for_contract(contract, matched_contracts_list):
-                """Find the matching data for a specific contract from Matching Agent output"""
-                contract_filename = contract.get("file_name", "")
-                for match in matched_contracts_list:
-                    match_contract = match.get("contract", {})
-                    if match_contract.get("file_name") == contract_filename:
-                        # Return the first opportunity from the match
-                        opportunities = match.get("opportunities", [])
-                        return opportunities[0] if opportunities else None
-                return None
             
             def extract_contract_signers(contract):
                 """Extract previous contract signers and key people from contract"""
@@ -461,7 +558,7 @@ class ActionAgent:
                 can_expand = False
                 
                 # Check contract value vs CRM opportunity value
-                contract_value = extract_contract_value(contract)
+                contract_value = self._extract_contract_value(contract)
                 if crm_match and isinstance(contract_value, (int, float)):
                     crm_amount = crm_match.get("amount", 0)
                     # Format amounts safely for display
@@ -485,7 +582,7 @@ class ActionAgent:
                         can_expand = True
                 
                 # Check product mix for expansion potential
-                products = extract_products(contract)
+                products = self._extract_products(contract)
                 if len(products) == 1 and products[0] in ["Cognos", "watsonx ESA"]:
                     expansion_signals.append(f"Single product ({products[0]}) - opportunity to introduce complementary solutions")
                     can_expand = True
@@ -548,22 +645,53 @@ class ActionAgent:
                 }
             
             def determine_recipient(contract, crm_match, query, partner_profile):
-                """Determine email recipient based on context"""
-                products = extract_products(contract)
-                if "cpo" in query.lower():
+                """
+                Determine email recipient based on seller query, CRM next steps,
+                product type, and contract urgency.
+
+                Priority order:
+                  1. Explicit role mention in seller query (cpo / cto / cfo / ceo)
+                  2. Role mentioned in CRM next steps
+                  3. Product-based heuristic (AI/tech products → CTO)
+                  4. Renewal / procurement focus → CPO
+                  5. Critical urgency → CEO
+                  6. Default → CPO
+                """
+                products = self._extract_products(contract)
+                query_lower = query.lower()
+                crm_next_steps = str(crm_match.get("next_steps", "") if crm_match else "").lower()
+
+                # 1. Explicit mention in seller query
+                if "cfo" in query_lower:
+                    role = "CFO"
+                elif "cpo" in query_lower:
                     role = "CPO"
-                elif "cto" in query.lower():
+                elif "cto" in query_lower:
                     role = "CTO"
-                elif "ceo" in query.lower():
+                elif "ceo" in query_lower:
                     role = "CEO"
+                # 2. Role mentioned in CRM next steps
+                elif "cfo" in crm_next_steps:
+                    role = "CFO"
+                elif "cto" in crm_next_steps or "chief technology" in crm_next_steps:
+                    role = "CTO"
+                elif "cpo" in crm_next_steps or "chief product" in crm_next_steps or "chief procurement" in crm_next_steps:
+                    role = "CPO"
+                elif "ceo" in crm_next_steps or "chief executive" in crm_next_steps:
+                    role = "CEO"
+                # 3. Product heuristic
                 elif any(p in ["watsonx.ai", "watsonx.governance", "watsonx Orchestrate"] for p in products):
                     role = "CTO"
-                elif crm_match and "renew" in str(crm_match.get("next_steps", "")).lower():
+                # 4. Renewal / procurement focus
+                elif crm_match and "renew" in crm_next_steps:
                     role = "CPO"
+                # 5. Critical urgency
                 elif (urgency := calculate_urgency(contract)) and urgency["urgency_level"] == "CRITICAL":
                     role = "CEO"
+                # 6. Default
                 else:
                     role = "CPO"
+
                 return extract_executive_info(partner_profile, role)
             
             # Create detailed reasoning for each contract
@@ -572,9 +700,9 @@ class ActionAgent:
             # Process expired contracts first (highest priority)
             for contract in recently_expired:
                 urgency = calculate_urgency(contract)
-                crm_match = find_matching_data_for_contract(contract, matched_contracts)
-                products = extract_products(contract)
-                value = extract_contract_value(contract)
+                crm_match = self._find_matching_data_for_contract(contract, matched_contracts)
+                products = self._extract_products(contract)
+                value = self._extract_contract_value(contract)
                 recipient_info = determine_recipient(contract, crm_match, lowered_query, partner_profile)
                 signers = extract_contract_signers(contract)
                 expansion = detect_expansion_opportunity(contract, crm_match)
@@ -728,9 +856,9 @@ class ActionAgent:
             # Process renewal candidates
             for contract in renewal_candidates:
                 urgency = calculate_urgency(contract)
-                crm_match = find_matching_data_for_contract(contract, matched_contracts)
-                products = extract_products(contract)
-                value = extract_contract_value(contract)
+                crm_match = self._find_matching_data_for_contract(contract, matched_contracts)
+                products = self._extract_products(contract)
+                value = self._extract_contract_value(contract)
                 recipient_info = determine_recipient(contract, crm_match, lowered_query, partner_profile)
                 
                 reasoning_parts = [
@@ -875,10 +1003,12 @@ class ActionAgent:
             recommended_action = state.get("recommended_action", {})
             risk_assessment = state.get("risk_assessment", {})
             seller_query = state.get("seller_query", "")
+            matching_data = state.get("matching_data", {})
 
             partner_name = partner_profile.get("partner_name", "Partner")
             portfolio = contract_summary.get("portfolio_summary", {})
             ranked_next_steps = recommended_action.get("ranked_next_steps", [])
+            matched_contracts = matching_data.get("matched_contracts", [])
             detailed_actions = recommended_action.get("detailed_actions", [])
             top_step = ranked_next_steps[0] if ranked_next_steps else "Review contract portfolio and schedule follow-up."
             
@@ -957,79 +1087,126 @@ class ActionAgent:
             crm_updates["crm_file_updated"] = False
             crm_updates["crm_update_disabled"] = True
 
-            # Enhanced email generation with detailed context and extracted executive info
+            # ----------------------------------------------------------------
+            # EMAIL GENERATION
+            # Builds a rich, CRM-next-steps-aware context block so the LLM
+            # can write a single, clean, targeted email.
+            # ----------------------------------------------------------------
             recipient_info = {"role": "CPO", "name": None, "title": "CPO"}
-            contract_details = ""
-            crm_context = ""
-            urgency_context = ""
-            
+
+            # ---- Pull structured data for the top-priority action ----------
+            contract_products_str = "IBM software portfolio"
+            contract_value_str    = "significant value"
+            contract_end_date_str = "recently"
+            contract_status_str   = "requires attention"
+            crm_next_steps_str    = ""
+            crm_owner_str         = ""
+            crm_stage_str         = ""
+            crm_opp_name_str      = ""
+            has_crm_match         = False
+
             if detailed_actions:
-                top_action = detailed_actions[0]
+                top_action   = detailed_actions[0]
                 recipient_info = top_action.get("recipient_info", {"role": "CPO", "name": None, "title": "CPO"})
-                
-                # Extract contract details from reasoning
-                reasoning = top_action.get("reasoning", "")
-                if "CONTRACT:" in reasoning:
-                    contract_section = reasoning.split("CRM LINKAGE:")[0] if "CRM LINKAGE:" in reasoning else reasoning.split("\n\n")[0]
-                    contract_details = contract_section.strip()
-                
-                if "CRM LINKAGE:" in reasoning:
-                    crm_section = reasoning.split("CRM LINKAGE:")[1].split("URGENCY ANALYSIS:")[0] if "URGENCY ANALYSIS:" in reasoning else reasoning.split("CRM LINKAGE:")[1].split("\n\n")[0]
-                    crm_context = crm_section.strip()
-                
-                if "URGENCY ANALYSIS:" in reasoning:
-                    urgency_section = reasoning.split("URGENCY ANALYSIS:")[1].split("RECOMMENDED ACTIONS:")[0] if "RECOMMENDED ACTIONS:" in reasoning else reasoning.split("URGENCY ANALYSIS:")[1].split("\n\n")[0]
-                    urgency_context = urgency_section.strip()
-            
-            # Determine greeting based on whether we have the executive's name
-            recipient_display = recipient_info["name"] if recipient_info["name"] else f"the {recipient_info['role']}"
-            greeting_name = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
-            
+                crm_owner_str  = top_action.get("crm_owner") or ""
+
+                # Locate the source contract object for rich metadata
+                all_portfolio_contracts = (
+                    contract_summary.get("portfolio_summary", {}).get("recently_expired_contracts", []) +
+                    contract_summary.get("portfolio_summary", {}).get("renewal_candidates", []) +
+                    contract_summary.get("portfolio_summary", {}).get("active_contracts", [])
+                )
+                source_contract = next(
+                    (c for c in all_portfolio_contracts
+                     if c.get("file_name") == top_action.get("contract")),
+                    {}
+                )
+
+                if source_contract:
+                    prods = self._extract_products(source_contract)
+                    contract_products_str = ", ".join(prods) if prods else contract_products_str
+                    val = self._extract_contract_value(source_contract)
+                    if val and val not in ("Unknown", None):
+                        # Format as currency if numeric, else use as-is
+                        if isinstance(val, (int, float)):
+                            contract_value_str = f"${val:,.0f}"
+                        else:
+                            contract_value_str = str(val)
+                    end_date = source_contract.get("end_date", "")
+                    if end_date and end_date != "Unknown":
+                        contract_end_date_str = end_date
+                    status = source_contract.get("status", "")
+                    if status:
+                        contract_status_str = status.upper()
+
+                # Pull CRM match details
+                crm_match = self._find_matching_data_for_contract(
+                    source_contract or {"file_name": top_action.get("contract", "")},
+                    matched_contracts
+                )
+                if crm_match:
+                    has_crm_match     = True
+                    crm_next_steps_str = crm_match.get("next_steps", "") or ""
+                    crm_owner_str      = crm_match.get("owner", crm_owner_str) or crm_owner_str
+                    crm_stage_str      = crm_match.get("stage", "") or ""
+                    crm_opp_name_str   = crm_match.get("opportunity_name", "") or ""
+
+            recipient_name_str = recipient_info["name"] if recipient_info["name"] else None
+            recipient_role_str = recipient_info["role"]
+            greeting           = recipient_name_str if recipient_name_str else recipient_role_str
+            recipient_display  = recipient_name_str if recipient_name_str else recipient_role_str
+
+            # ---- Build a tightly-scoped CRM next-steps guidance block ------
+            # If CRM next steps exist, the email should directly address them.
+            crm_guidance_block = ""
+            if crm_next_steps_str.strip():
+                crm_guidance_block = (
+                    f"CRM Next Steps on file: \"{crm_next_steps_str}\"\n"
+                    f"CRM Opportunity: {crm_opp_name_str}\n"
+                    f"CRM Stage: {crm_stage_str}\n"
+                    f"Account Owner in CRM: {crm_owner_str}\n\n"
+                    "The email MUST directly address what the CRM next steps say. "
+                    "If the next steps mention sizing, address that. If they mention a specific meeting or decision, reference it. "
+                    "If there is an account owner noted above, mention coordinating with them."
+                )
+            else:
+                crm_guidance_block = (
+                    "No CRM next steps are on file. The email should re-engage the contact from scratch, "
+                    "noting the gap since the contract ended and proposing a specific meeting to restart discussions."
+                )
+
             email_prompt = ChatPromptTemplate.from_template(
-                "You are drafting ONE professional email from an IBM seller to {recipient_display} at {partner_name}.\n\n"
-                "RECIPIENT INFORMATION:\n"
-                "- Role: {recipient_role}\n"
-                "- Name: {recipient_name}\n\n"
-                "CONTRACT CONTEXT:\n"
-                "{contract_details}\n\n"
-                "CRM INFORMATION:\n"
-                "{crm_context}\n\n"
-                "URGENCY:\n"
-                "{urgency_context}\n\n"
-                "ADDITIONAL CONTEXT:\n"
-                "- Risk Level: {risk_level}\n"
-                "- Partner Maturity: {maturity}\n"
-                "- Top Priority Action: {top_step}\n\n"
-                "EXAMPLE OUTPUT (for reference - adapt to your specific context):\n"
-                "Subject: Urgent: watsonx Contract Renewal Discussion\n\n"
-                "Dear Shaun,\n\n"
-                "I'm reaching out regarding our watsonx.ai and watsonx.governance agreement that expired on January 31st. "
-                "With $500K in annual value, I want to ensure continuity of your AI initiatives.\n\n"
-                "Our CRM shows Anand Das has been working with your team on renewal sizing. "
-                "I'd like to schedule a brief call this week to discuss your current needs and expedite the renewal process. "
-                "Given the 68-day gap since expiration, acting quickly will help avoid any service disruptions.\n\n"
-                "Are you available for a 30-minute call on Thursday or Friday to align on next steps?\n\n"
-                "Best regards,\n"
-                "Sarah Chen\n"
-                "IBM Seller\n\n"
-                "CRITICAL INSTRUCTIONS:\n"
-                "1. Write EXACTLY ONE email - no variations, no alternatives, no examples\n"
-                "2. Use executive tone appropriate for {recipient_role}\n"
-                "3. Reference specific contract details naturally (products, amounts, dates)\n"
-                "4. Include a clear call-to-action (meeting request, deadline, next step)\n"
-                "5. Keep under 200 words\n"
-                "6. End with EXACTLY:\n"
+                "You are a senior IBM seller writing ONE professional outreach email.\n\n"
+                "════════════════════════════════════════════\n"
+                "RECIPIENT\n"
+                "  Name : {recipient_name}\n"
+                "  Role : {recipient_role}\n"
+                "  Company: {partner_name}\n\n"
+                "CONTRACT FACTS\n"
+                "  Product(s)   : {products}\n"
+                "  Contract Value: {value}\n"
+                "  End / Expiry : {end_date}\n"
+                "  Status       : {status}\n\n"
+                "CRM INTELLIGENCE\n"
+                "{crm_guidance}\n\n"
+                "OVERALL RISK: {risk_level}\n"
+                "TOP PRIORITY ACTION: {top_step}\n"
+                "════════════════════════════════════════════\n\n"
+                "WRITING RULES — follow every one:\n"
+                "1. Output EXACTLY ONE email. No alternatives, no commentary, no markdown fences.\n"
+                "2. Open with 'Subject:' on the first line, blank line, then 'Dear {greeting},'.\n"
+                "3. Write 2–3 short paragraphs (total 150–200 words):\n"
+                "   • Para 1 – What you are reaching out about (contract, product, timing).\n"
+                "   • Para 2 – Address the CRM next steps directly and concretely.\n"
+                "   • Para 3 – Specific call-to-action with a proposed timeline or meeting ask.\n"
+                "4. Reference the exact products, contract value, and expiry date.\n"
+                "5. If a CRM account owner is named, mention coordinating with them.\n"
+                "6. Tone: confident, concise, executive-appropriate — no fluff.\n"
+                "7. Close with:\n"
                 "   Best regards,\n"
                 "   [Your Name]\n"
                 "   IBM Seller\n\n"
-                "OUTPUT FORMAT (follow exactly):\n"
-                "Subject: [one line]\n\n"
-                "Dear [Name or Role],\n\n"
-                "[2-3 paragraphs with specific details]\n\n"
-                "Best regards,\n"
-                "[Your Name]\n"
-                "IBM Seller\n\n"
-                "STOP after the signature. Do NOT write multiple versions. Do NOT add explanations or markdown. Output ONLY ONE complete email."
+                "STOP immediately after 'IBM Seller'. Output nothing else."
             )
 
             llm = WatsonxLLM(
@@ -1038,34 +1215,31 @@ class ActionAgent:
                 apikey=self.apikey,
                 project_id=self.project_id,
                 params={
-                    "max_new_tokens": 600,
-                    "temperature": 0.3,
-                    "decoding_method": "sample"
+                    "max_new_tokens": 500,
+                    "temperature": 0.2,
+                    "decoding_method": "greedy"
                 }
             )
 
             formatted_prompt = email_prompt.invoke({
-                "recipient_display": recipient_display,
-                "recipient_role": recipient_info["role"],
-                "recipient_name": recipient_info["name"] if recipient_info["name"] else "Not available - use role title",
+                "recipient_name": recipient_name_str if recipient_name_str else f"the {recipient_role_str}",
+                "recipient_role": recipient_role_str,
+                "greeting": greeting,
                 "partner_name": partner_name,
-                "contract_details": contract_details if contract_details else "Active partnership agreements",
-                "crm_context": crm_context if crm_context else "Reviewing partnership status",
-                "urgency_context": urgency_context if urgency_context else "Ensuring continuity of our partnership",
+                "products": contract_products_str,
+                "value": contract_value_str,
+                "end_date": contract_end_date_str,
+                "status": contract_status_str,
+                "crm_guidance": crm_guidance_block,
                 "risk_level": risk_assessment.get("risk_level", "Medium"),
-                "maturity": partner_profile.get("maturity_level", "Partner"),
-                "top_step": top_step
+                "top_step": top_step,
             })
 
             result = llm.invoke(formatted_prompt)
             draft_email_raw = result.content if hasattr(result, "content") else str(result)
-            
-            # POST-PROCESS: Extract only the FIRST complete email
-            # LLM sometimes generates multiple versions despite instructions
+
+            # POST-PROCESS: strip duplicate emails and stray preamble
             draft_email = self._extract_first_email(draft_email_raw)
-            
-            # Format recipient display for output
-            recipient_display = recipient_info["name"] if recipient_info["name"] else recipient_info["role"]
 
             return {
                 "crm_updates": crm_updates,
@@ -1273,4 +1447,3 @@ if __name__ == "__main__":
     result = agent.run(mock_contract_summary, mock_partner_profile)
     
     print(result["final_output"])
-
