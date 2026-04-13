@@ -88,30 +88,46 @@ def extract_structured_fields(text, filename=""):
         amount_match = re.search(r'\$[\d,]+\.?\d*', text)
         structured['amount'] = amount_match.group(0) if amount_match else "Not specified"
     
-    # Extract products - look for ALL mentions
+    # Extract products from IBM Cloud Subscription table's Product Description column
     products = []
     text_lower = text.lower()
     
-    # Check for all watsonx variants
-    if "watsonx" in text_lower:
-        if "orchestrate" in text_lower:
-            products.append("watsonx Orchestrate")
-        if "governance" in text_lower or "watsonx.governance" in text_lower:
-            products.append("watsonx.governance")
-        if "watsonx.ai" in text_lower or "watsonx ai" in text_lower:
-            products.append("watsonx.ai")
-        if "watsonx.data" in text_lower or "watsonx data" in text_lower:
-            products.append("watsonx.data")
-        if "watsonx as a service" in text_lower:
-            products.append("watsonx as a Service")
-        if "code assistant" in text_lower:
-            products.append("watsonx Code Assistant")
-        # Only add generic if no specific products found
-        if not products:
-            products.append("watsonx ESA")
+    # Look for IBM Cloud Subscription table and Product Description
+    # The table structure has "Product Description" as a header
+    product_desc_match = re.search(r'product description[:\s]+(.*?)(?:quantity|$)', text, re.IGNORECASE | re.DOTALL)
     
-    if "cognos" in text_lower:
-        products.append("Cognos")
+    if product_desc_match:
+        product_text = product_desc_match.group(1).lower()
+        
+        # If Product Description includes "IBM watsonx as a Service", extract specific watsonx products
+        if "ibm watsonx as a service" in product_text or "watsonx as a service" in product_text:
+            products.extend(["watsonx Orchestrate", "watsonx.governance", "watsonx.ai"])
+        
+        # Check for Cognos
+        if "cognos" in product_text:
+            products.append("Cognos")
+    
+    # Fallback: if no products found in table, search entire text
+    if not products:
+        if "watsonx" in text_lower:
+            if "orchestrate" in text_lower:
+                products.append("watsonx Orchestrate")
+            if "governance" in text_lower or "watsonx.governance" in text_lower:
+                products.append("watsonx.governance")
+            if "watsonx.ai" in text_lower or "watsonx ai" in text_lower:
+                products.append("watsonx.ai")
+            if "watsonx.data" in text_lower or "watsonx data" in text_lower:
+                products.append("watsonx.data")
+            if "watsonx as a service" in text_lower:
+                products.extend(["watsonx Orchestrate", "watsonx.governance", "watsonx.ai"])
+            if "code assistant" in text_lower:
+                products.append("watsonx Code Assistant")
+            # Only add generic if no specific products found
+            if not products:
+                products.append("watsonx ESA")
+        
+        if "cognos" in text_lower:
+            products.append("Cognos")
     
     # Remove duplicates while preserving order
     products = list(dict.fromkeys(products))
@@ -122,22 +138,36 @@ def extract_structured_fields(text, filename=""):
     start_date_str = effective_date_match.group(1) if effective_date_match else "Not specified"
     structured['start_date'] = start_date_str
     
-    # Extract term length and calculate actual end date
+    # Extract term length
     term_match = re.search(r'term of this TD will be (\w+) \((\d+)\) years? from the Effective Date', text, re.IGNORECASE)
-    if term_match and start_date_str != "Not specified":
+    if term_match:
         term_years = int(term_match.group(2))
         structured['term_length'] = f"{term_years} year(s)"
-        
-        # Calculate actual end date
-        try:
-            start_date = parse_date(start_date_str)
-            end_date = start_date + relativedelta(years=term_years)
-            structured['end_date'] = end_date.strftime("%Y-%m-%d")
-        except:
-            structured['end_date'] = f"{term_years} year(s) from {start_date_str}"
     else:
         structured['term_length'] = "Not specified"
-        structured['end_date'] = "Not specified"
+    
+    # CRITICAL: Extract end_date from Coverage Period field (NOT calculated from start + term)
+    # Coverage Period format: "MM/DD/YYYY-MM/DD/YYYY" where second date is the end date
+    # In tables, the date is in a separate row from the header, so just search for the date pattern
+    coverage_period_match = re.search(r'(\d{2}/\d{2}/\d{4})-(\d{2}/\d{2}/\d{4})', text)
+    if coverage_period_match:
+        end_date_str = coverage_period_match.group(2)  # Second date is end date
+        try:
+            end_date = datetime.strptime(end_date_str, "%m/%d/%Y")
+            structured['end_date'] = end_date.strftime("%Y-%m-%d")
+        except:
+            structured['end_date'] = "Not specified"
+    else:
+        # Fallback: if no Coverage Period found, try calculating from start + term
+        if term_match and start_date_str != "Not specified":
+            try:
+                start_date = parse_date(start_date_str)
+                end_date = start_date + relativedelta(years=term_years)
+                structured['end_date'] = end_date.strftime("%Y-%m-%d")
+            except:
+                structured['end_date'] = f"{term_years} year(s) from {start_date_str}"
+        else:
+            structured['end_date'] = "Not specified"
     
     # Extract parties - ensure BOTH are captured
     parties = []
