@@ -9,7 +9,7 @@ from typing import TypedDict, Annotated, Optional, Dict, List, Union
 from langgraph.graph import StateGraph, START, END
 from langchain_ibm import WatsonxLLM, WatsonxEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_core.documents import Document
 import operator
 import os
@@ -442,23 +442,29 @@ class ContractAgent:
                 "Based on this extracted contract metadata and the full contract text:\n\n"
                 "{metadata}\n\n"
                 "FULL CONTRACT TEXT (first 5000 chars):\n{contract_text}\n\n"
-                "CRITICAL INSTRUCTIONS:\n"
+                "CRITICAL INSTRUCTIONS FOR DATE EXTRACTION:\n"
+                "1. Look for 'Coverage Period' field in the contract (e.g., '05/31/2023-05/31/2026')\n"
+                "2. The end_date is the SECOND date in the Coverage Period (e.g., '05/31/2026' becomes '2026-05-31')\n"
+                "3. DO NOT calculate end_date from start_date + term_length\n"
+                "4. If Coverage Period is not found, look for explicit end date or expiration date\n\n"
+                "DATE EXTRACTION EXAMPLES:\n"
+                "- Coverage Period: '01/31/2024-01/31/2025' → end_date='2025-01-31'\n"
+                "- Coverage Period: '07/31/2024-07/31/2026' → end_date='2026-07-31'\n"
+                "- Coverage Period: '05/31/2023-05/31/2026' → end_date='2026-05-31'\n\n"
+                "OTHER CRITICAL INSTRUCTIONS:\n"
                 "1. Extract BOTH parties (IBM AND the partner company like Confluent)\n"
-                "2. Calculate the actual end_date by adding term_length to start_date\n"
-                "3. Extract ALL products as an array - if you see 'watsonx as a Service, watsonx Code Assistant', extract BOTH\n"
-                "4. The partner company name is often in the filename (e.g., 'Confluent_IBM-1.30.2024.docx' means Confluent is a party)\n\n"
-                "DATE CALCULATION EXAMPLES:\n"
-                "- start_date='2024-01-31', term='1 year' → end_date='2025-01-31'\n"
-                "- start_date='2024-03-30', term='2 years' → end_date='2026-03-30'\n"
-                "- start_date='2023-03-30', term='3 years' → end_date='2026-03-30'\n\n"
+                "2. Extract ALL products as an array - if you see 'watsonx as a Service, watsonx Code Assistant', extract BOTH\n"
+                "3. The partner company name is often in the filename (e.g., 'Confluent_IBM-1.30.2024.docx' means Confluent is a party)\n\n"
                 "PRODUCT EXTRACTION EXAMPLES:\n"
                 "- Text: 'Cloud Services IBM watsonx as a Service, IBM watsonx Code Assistant for Ansible Service'\n"
-                "- Extract: ['watsonx as a Service', 'watsonx Code Assistant for Ansible Service']\n\n"
+                "- Extract: ['watsonx as a Service', 'watsonx Code Assistant']\n"
+                "- Text: 'Cognos'\n"
+                "- Extract: ['Cognos']\n\n"
                 "Create a structured JSON summary with these fields:\n"
                 "- parties: array of party names (MUST include both IBM and partner)\n"
                 "- effective_date: normalized date (YYYY-MM-DD format)\n"
                 "- start_date: contract start date (YYYY-MM-DD format, same as effective_date)\n"
-                "- end_date: CALCULATED end date (YYYY-MM-DD format, NOT 'X years from effective date')\n"
+                "- end_date: END DATE from Coverage Period (YYYY-MM-DD format, NOT calculated)\n"
                 "- term_length: normalized duration (e.g., '1 year', '2 years', '3 years')\n"
                 "- amount: total contract value with currency (e.g., '$500,092.80')\n"
                 "- products: array of ALL products/services mentioned (extract each one separately)\n"
@@ -466,8 +472,8 @@ class ContractAgent:
                 "- milestones: array of key milestones\n"
                 "- contract_type: inferred type (e.g., 'ESA', 'Sales Agreement', 'Service Contract')\n"
                 "- risk_level: assessed risk level (Low/Medium/High)\n\n"
-                "IMPORTANT: Extract the EXACT dollar amount, ALL product names, and calculate actual dates.\n"
-                "Look for phrases like 'committed order value', 'Purchase Commitment', 'Cloud Services', 'watsonx', 'Effective Date', 'term of this TD'.\n\n"
+                "IMPORTANT: Extract the EXACT end date from Coverage Period, EXACT dollar amount, and ALL product names.\n"
+                "Look for phrases like 'Coverage Period', 'committed order value', 'Purchase Commitment', 'Cloud Services', 'watsonx', 'Cognos', 'Effective Date'.\n\n"
                 "Provide ONLY valid JSON, no additional text."
             )
             
@@ -976,7 +982,7 @@ class ContractAgent:
                         })
                     else:
                         long_dated_contracts.append(contract_record)
-                elif -90 <= days_to_end < 0:
+                else:  # days_to_end < 0 - contract has expired
                     recently_expired.append({**contract_record, "days_since_expiry": abs(days_to_end)})
 
             if "cognos" in normalized_text:
