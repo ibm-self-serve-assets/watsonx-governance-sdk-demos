@@ -591,8 +591,9 @@ class SupervisoryAgent:
                             
                             output_parts.append(f"\n  • {contract_file} ({product})")
                             for opp in opps:
+                                opp_num = opp.get('opportunity_number', '?')
                                 output_parts.extend([
-                                    f"    → CRM: {opp.get('opportunity_name', 'Unknown')}",
+                                    f"    → CRM #{opp_num}: {opp.get('opportunity_name', 'Unknown')}",
                                     f"      Owner: {opp.get('owner', 'Unknown')}",
                                     f"      Next Steps: {opp.get('next_steps', 'None')}"
                                 ])
