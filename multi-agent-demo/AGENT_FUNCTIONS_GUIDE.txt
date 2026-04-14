@@ -133,6 +133,7 @@ Output Structure:
     "sales_history": {
       "opportunities": [
         {
+          "opportunity_number": 6,  # NEW: Excel row number (1-12) for tracking
           "opportunity_name": "Confluent watsonx ESA Renewal",
           "owner": "Anand Das",
           "stage": "Qualified",
@@ -148,6 +149,12 @@ Output Structure:
     "revenue": "$1.167B in 2025",
     "growth": "21% YoY"
   }
+
+IMPORTANT UPDATE (2026-04-14):
+- Added opportunity_number field to track Excel row numbers (1-12)
+- This allows matching output to show "CRM #1: Confluent Cognos" format
+- Calculated as sequential row number from Excel file (header = row 1, data starts row 2)
+- Used throughout matching and action agents for clear opportunity identification
 }
 
 ================================================================================
@@ -290,6 +297,20 @@ Analysis Logic:
   - CRM stage "Won" → "Natural expiration after successful engagement"
   - Active engagement → "Timing gap - discussions ongoing but contract lapsed"
 Example: Expired contract with no CRM → Returns {"primary_reason": "No proactive outreach", "action": "URGENT: Create CRM opportunity and reach out immediately"}
+
+detect_renewal_chains(all_contracts) **NEW FUNCTION (2026-04-14)**
+What it does: Identifies renewal series and filters out old contracts that have been renewed
+Simple explanation: Groups contracts by product, finds renewal chains, and keeps only the MOST RECENT contract in each series
+Why it matters: Prevents recommending action on old expired contracts that have already been renewed
+Logic:
+  - Groups contracts by product (e.g., all watsonx contracts together)
+  - Sorts by end date (most recent first)
+  - Keeps only the most recent contract in each group
+  - Filters out older contracts in the renewal chain
+Example:
+  Input: [1.30.2024 contract (expired 438 days), 1.30.2025 contract (expired 73 days)]
+  Output: [1.30.2025 contract] - filters out the older 1.30.2024 contract
+  Logs: "🔄 Renewal chain detected for watsonx: 1.30.2025 → MOST RECENT, 1.30.2024 (older, filtered out)"
 
 determine_recipient(contract, crm_match, query, partner_profile)
 What it does: Decides who should receive the email based on context
