@@ -132,7 +132,7 @@ Status: {contract.get("status", "unknown")}
         
         # Format opportunities for LLM
         opp_info = "\n\n".join([
-            f"""Opportunity {i+1}:
+            f"""Opportunity {opp.get('opportunity_number', i+1)} (CRM #{opp.get('opportunity_number', i+1)}):
 Name: {opp.get('opportunity_name', 'Unknown')}
 Owner: {opp.get('owner', 'Unknown')}
 Products: {opp.get('products', 'Unknown')}
@@ -157,7 +157,7 @@ Next Steps: {opp.get('next_steps', 'None')}"""
             }
         )
         
-        # Matching prompt
+        # Matching prompt with business logic
         prompt = f"""Analyze this contract and identify which CRM opportunities match it.
 
 CONTRACT:
@@ -166,22 +166,43 @@ CONTRACT:
 CRM OPPORTUNITIES:
 {opp_info}
 
-MATCHING RULES:
+IMPORTANT BUSINESS RULES FOR MATCHING:
 
-1. For EXPIRED contracts: Look for ACTIVE opportunities (Stage=Qualify/Design/Engage/Negotiate) with:
-   - Same/similar products
-   - Similar dollar amounts (within 7%)
-   - Next Steps mentioning "renewal", "expired", or "renew"
+1. AMOUNT MATCHING:
+   - CRM amounts are ROUNDED (e.g., $250,000) while contracts have EXACT amounts (e.g., $250,003.20)
+   - Use ±7% tolerance when comparing amounts
+   - Example: $250,000 (CRM) matches $250,003.20 (contract) ✓
 
-2. For ACTIVE contracts: Look for opportunities with:
-   - Contract Expiration Date matching the contract's End Date
-   - Same products and amounts
+2. PRODUCT MATCHING:
+   - "watsonx" or "watsonx as a service" in contracts should match ANY watsonx product in CRM
+   - Examples: "watsonx" matches "watsonx.ai", "watsonx.data", "watsonx.governance", "watsonx Orchestrate" ✓
+   - "Cognos" matches "Cognos Analytics", "Cognos BI" ✓
+
+3. DATE MATCHING FOR RENEWALS:
+   - ±2 days between contract end date and opportunity close date is a STRONG indicator of renewal
+   - However, renewals can happen OUTSIDE the ±2 day window (e.g., months before expiration)
+   - Look at the full context: products, amounts, and "Next Steps" mentioning renewal
+
+4. MATCHING LOGIC:
+   - For EXPIRED contracts: Look for ACTIVE opportunities (Stage=Qualify/Design/Engage/Negotiate) with:
+     * Same/similar products (use rules above)
+     * Similar amounts (±7% tolerance)
+     * Next Steps mentioning "renewal", "expired", or "renew"
+   
+   - For ACTIVE contracts: Look for opportunities with:
+     * Contract Expiration Date matching the contract's End Date (±2 days is strong, but not required)
+     * Same products (use product matching rules)
+     * Similar amounts (±7% tolerance)
+
+5. MULTIPLE MATCHES:
+   - A contract can match MULTIPLE opportunities (e.g., renewal + expansion)
+   - List ALL matching opportunities, not just the best one
 
 RESPOND IN THIS EXACT FORMAT (fill in all fields):
 
-MATCHED_OPPORTUNITIES: [list numbers like "1, 6", the Opportunity Name, or write "NONE"]
+MATCHED_OPPORTUNITIES: [list CRM opportunity numbers like "1, 6" or write "NONE"]
 CONFIDENCE: [write "high", "medium", or "low"]
-REASONING: [explain your decision in 1-2 sentences]
+REASONING: [explain your decision, referencing the business rules above]
 
 Now analyze and respond:"""
 
@@ -189,7 +210,7 @@ Now analyze and respond:"""
             response = llm.invoke(prompt)
             
             # Parse LLM response
-            matched_indices = []
+            matching_opps = []
             confidence = "low"
             reasoning = "Unable to parse LLM response"
             
@@ -198,17 +219,16 @@ Now analyze and respond:"""
                 if line.startswith("MATCHED_OPPORTUNITIES:"):
                     matched_str = line.split(":", 1)[1].strip()
                     if matched_str.upper() != "NONE":
-                        # Extract numbers
+                        # Extract numbers - these are CRM opportunity numbers
                         import re
                         numbers = re.findall(r'\d+', matched_str)
-                        matched_indices = [int(n) - 1 for n in numbers if 0 <= int(n) - 1 < len(opportunities)]
+                        # Match by opportunity_number field
+                        matched_numbers = [int(n) for n in numbers]
+                        matching_opps = [opp for opp in opportunities if opp.get('opportunity_number') in matched_numbers]
                 elif line.startswith("CONFIDENCE:"):
                     confidence = line.split(":", 1)[1].strip().lower()
                 elif line.startswith("REASONING:"):
                     reasoning = line.split(":", 1)[1].strip()
-            
-            # Get matched opportunities
-            matching_opps = [opportunities[i] for i in matched_indices]
             
             print(f"\nLLM Matching for {filename}:")
             print(f"  Matched: {len(matching_opps)} opportunities")
@@ -501,8 +521,9 @@ Now analyze and respond:"""
                     for opp in opportunities:
                         stage = opp.get('stage', 'Unknown')
                         stage_emoji = "✅" if stage == "Won" else "❌" if stage == "Lost" else "🔄"
+                        opp_num = opp.get('opportunity_number', '?')
                         output_parts.extend([
-                            f"   {stage_emoji} Opportunity: {opp.get('opportunity_name', 'Unknown')}",
+                            f"   {stage_emoji} CRM #{opp_num}: {opp.get('opportunity_name', 'Unknown')}",
                             f"      Owner: {opp.get('owner', 'Unknown')}",
                             f"      Stage: {stage}",
                             f"      Amount: {opp.get('amount', '$0')}",
