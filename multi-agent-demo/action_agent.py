@@ -707,8 +707,53 @@ class ActionAgent:
             # Create detailed reasoning for each contract
             detailed_actions = []
             
-            # Process expired contracts first (highest priority)
-            for contract in recently_expired:
+            # Detect renewal chains - group contracts by product to find renewal series
+            def detect_renewal_chains(all_contracts):
+                """
+                Detect renewal chains and return only the most recent contract in each series.
+                Contracts with same product and sequential dates are considered a renewal chain.
+                """
+                from collections import defaultdict
+                
+                # Group contracts by product
+                product_groups = defaultdict(list)
+                for contract in all_contracts:
+                    products = self._extract_products(contract)
+                    product_key = tuple(sorted(products))  # Use sorted tuple as key
+                    product_groups[product_key].append(contract)
+                
+                # For each product group, keep only the most recent contract
+                filtered_contracts = []
+                for product_key, contracts in product_groups.items():
+                    if len(contracts) == 1:
+                        filtered_contracts.append(contracts[0])
+                    else:
+                        # Sort by end date (most recent first)
+                        sorted_contracts = sorted(
+                            contracts,
+                            key=lambda c: c.get('end_date', '1900-01-01'),
+                            reverse=True
+                        )
+                        # Keep only the most recent
+                        most_recent = sorted_contracts[0]
+                        filtered_contracts.append(most_recent)
+                        
+                        # Log the renewal chain detection
+                        print(f"\n🔄 Renewal chain detected for {', '.join(product_key)}:")
+                        for i, c in enumerate(sorted_contracts):
+                            marker = "→ MOST RECENT" if i == 0 else "  (older, filtered out)"
+                            print(f"   {c.get('file_name', 'Unknown')} - End: {c.get('end_date', 'Unknown')} {marker}")
+                
+                return filtered_contracts
+            
+            # Filter expired contracts to remove old renewals
+            all_expired = recently_expired.copy()
+            filtered_expired = detect_renewal_chains(all_expired)
+            
+            print(f"\n📊 Contract filtering: {len(recently_expired)} expired → {len(filtered_expired)} after removing old renewals")
+            
+            # Process filtered expired contracts first (highest priority)
+            for contract in filtered_expired:
                 urgency = calculate_urgency(contract)
                 crm_match = self._find_matching_data_for_contract(contract, matched_contracts)
                 products = self._extract_products(contract)
