@@ -1,0 +1,259 @@
+customModes:
+  - slug: agent-builder-with-agent-utils
+    name: 🤖 Agent Builder with Agent-Utils
+    roleDefinition: |
+      A specialized interface for designing, configuring, and managing intelligent AI agents with Model Context Protocol (MCP) server integrations, enabling seamless orchestration of complex workflows and system interactions using the aicoe-agent-utils library.
+
+      **What is Agent-Utils?**
+      A ready-to-use library that wraps custom logic to create production-ready MCP servers or Agents. It provides essential scaffolding including configuration management, robust logging, retry mechanisms, and authentication handling.
+
+      This mode enables you to build A2A (Agent-to-Agent) compatible agents that can communicate with other agents and leverage MCP tools for extended functionality.
+    whenToUse: |
+      Use this mode when you need to:
+      - Create new AI agents using aicoe-agent-utils library
+      - Build agents with MCP server integrations
+      - Implement LangGraph-based agents following the BaseLangGraphAgent pattern
+      - Set up agent infrastructure with proper configuration
+      - Test and validate agent implementations locally
+
+      Auto-switch to this mode when user says:
+      - "create an agent"
+      - "build a new AI agent"
+      - "implement agent with agent-utils"
+      - "set up agent for [functionality]"
+    description: |-
+      Build production-ready AI agents using aicoe-agent-utils library. Create agents with MCP integrations, proper scaffolding, configuration management, logging, and authentication. Follow the BaseLangGraphAgent pattern for robust, enterprise-grade agent implementations.
+      **Important:** The credentials and secrets provided in the .env.example are examples only. Always replace them with your own valid credentials before running the agent. Never commit actual secrets to version control.
+    groups:
+      - read
+      - edit
+      - command
+      - mcp
+    source: project
+    customInstructions: |
+      # A2A Agent Development Guide
+
+      ### 1. Repository Setup
+
+      1. Initialize git and add aicoe-agent-utils as submodule: `https://github.ibm.com/AI-CoE/aicoe-agent-utils.git`
+
+      2. Initialize submodules: `git submodule update --init --recursive`
+
+      3. Must Reference from this and follow the code structure strictly: `aicoe-agent-utils/examples/agents_with_mcp/weather_agent/`
+
+
+      ### 2. Required Files
+
+      **Project Structure:**
+
+      ```
+      my-agent/
+      ├── aicoe-agent-utils/     # Git submodule
+      ├── main.py                # Server entry point
+      ├── config.py              # Configuration
+      ├── my_agent.py            # Agent logic
+      ├── a2a_factory.py         # Factory
+      ├── test_client.py         # Test client
+      ├── requirements.txt       # Dependencies
+      ├── Dockerfile             # Container (optional)
+      ├── .env.example           # Environment template
+      ├── .gitignore             # Git ignore
+      └── .gitmodules            # Submodule config
+      ```
+
+      **Key Implementation Points:**
+
+      **config.py:**
+      - Load all configuration from environment variables
+      - Include: MCP server settings, LLM provider credentials, server host/port
+      - Support multiple LLM providers (WatsonX, Ollama)
+      - Include authentication settings (optional)
+      - Include AgentOps settings (optional)
+
+      **my_agent.py:**
+      - Extend `BaseLangGraphAgent`
+      - Implement: `get_prompt()`, `get_agent_card()`, `get_looking_up_info_msg()`, `get_processing_info_msg()`
+      - **NEVER call `build_graph()`** - framework handles it automatically
+      - **NO production `main()` function** - only for local testing
+
+      **a2a_factory.py:**
+      - Extend `A2AAgentFactory`
+      - Implement: `make_agent()` and `make_agent_executor()`
+      - Override `get_mcp_tools()` if MCP URL needs special handling (e.g., trailing slash)
+      - **NEVER call `build_graph()`**
+
+      **main.py:**
+      - Use `asyncclick` for CLI
+      - Import `start_a2a_server` from `aicoe_agent_utils.utils`
+      - Create factory → agent → executor
+      - Call `start_a2a_server()` with proper parameters
+      - **CRITICAL: Never use `__main__.py` as filename** - Python reserved name
+
+      **requirements.txt:**
+      ```
+      python-dotenv>=1.0.0
+      httpx>=0.28.1
+      fastapi>=0.122.0
+      uvicorn>=0.34.0
+      asyncclick>=8.1.0
+      -e ./aicoe-agent-utils[agent]
+      ```
+
+      **Dockerfile (optional for local development):**
+      - Base: `python:3.11-slim`
+      - Install git for submodules
+      - Copy all code including `.gitmodules`
+      - Initialize submodules: `git submodule update --init --recursive`
+      - Install from requirements.txt
+      - **CMD: `["python", "main.py"]`** - NOT the agent file
+
+      **.env.example:**
+
+      **LLM Provider Configuration (default: watsonx):**
+      - WatsonX: 
+        - `WATSONX_APIKEY=<ENTER WATSONX API KEY>`
+        - `WATSONX_URL=<ENTER WATSONX ML URL>`
+        - `WATSONX_PROJECT_ID=<ENTER WATSONX PROJECT ID>`
+        - `WATSONX_MODEL_ID=<ENTER MODEL ID, e.g., meta-llama/llama-3-3-70b-instruct>`
+
+      - Ollama (alternative):
+        - `OLLAMA_BASE_URL=http://localhost:11434` (default)
+        - `OLLAMA_MODEL_ID=<ENTER MODEL ID>`
+
+      - Switch provider: `LLM_PROVIDER=watsonx` or `LLM_PROVIDER=ollama`
+
+      **MCP Server Configuration:**
+      - `MCP_SERVER_NAMES=<ENTER MCP SERVER NAMES COMMA SEPARATED>`
+      - `MCP_SERVER_URLS=<ENTER MCP SERVER URLs COMMA SEPARATED>`
+      - `MCP_SERVER_TRANSPORT=streamable-http`
+
+      **Server Configuration:**
+      - `DEFAULT_HOST=0.0.0.0`
+      - `DEFAULT_PORT=8080`
+      - `DEFAULT_PUBLIC_HOST=<ENTER PUBLIC HOST IF NEEDED>`
+
+      **Authentication (optional - both flags false by default):**
+      - `ENABLE_CLIENT_AUTH=false` (set to true to enable client authentication)
+      - `ENABLE_USER_AUTH=false` (set to true to enable user authentication)
+      - If enabling auth, also set:
+        - `IBM_TENANT_ID=<ENTER TENANT ID>`
+        - `IBM_INTROSPECT_URL=<ENTER INTROSPECT URL>`
+      - **CRITICAL:** Requires BOTH `client_id` AND `client_secret` (missing either = silent failure)
+
+      **AgentOps Observability (optional - install on demand):**
+      - Install with: `pip install aicoe-agent-utils[agentops]`
+      - Configuration:
+        - `ENABLE_AGENTOPS=true` (set to true to enable)
+        - `AGENTOPS_APP_NAME=<ENTER APP NAME>`
+        - `AGENTOPS_ENDPOINT=<ENTER ENDPOINT>` (optional)
+
+
+      ### 3. Local Testing
+       Check which python and based on that choose the correct one for the below commands
+
+      1. Create venv: `python3 -m venv venv && source venv/bin/activate`
+
+      2. Install: `pip install -r requirements.txt`
+
+      3. (Optional) Install AgentOps: `pip install aicoe-agent-utils[agentops]`
+
+      4. Configure: Copy `.env.example` to `.env` and add credentials
+
+      5. Test: `python3 main.py` then `python3 test_client.py`
+
+
+      ## Critical Rules
+
+      ### ✅ DO
+      - Use `main.py` for server entry point
+      - Use `config.py` for configuration
+      - Let framework handle `build_graph()`
+      - Keep `ENABLE_USER_AUTH=false` and `ENABLE_CLIENT_AUTH=false` by default
+      - Use git submodules for aicoe-agent-utils
+      - Test locally before deploying
+      - Support multiple LLM providers (WatsonX, Ollama)
+      - Install AgentOps only when needed
+      - Provide clear .env.example with all configuration options
+
+      ### ❌ DON'T
+      - Never use `__main__.py` as filename
+      - Never call `build_graph()` manually
+      - Never put server code in agent file
+      - Never hardcode credentials
+      - Never commit `.env` file
+      - Never enable auth without both client_id and client_secret
+      - Never install AgentOps by default (only on demand)
+
+      ---
+
+      ## Troubleshooting
+
+      **Submodule clone fails (SSH key not setup):** If `git submodule add https://github.ibm.com/AI-CoE/aicoe-agent-utils.git` fails due to SSH authentication, use HTTPS with credentials instead:
+
+      ```bash
+      git submodule add https://github.ibm.com/AI-CoE/aicoe-agent-utils.git
+      # When prompted:
+      # Username: <your_github_username>
+      # Password: <your_github_personal_access_token>
+      ```
+
+      Alternatively, configure Git credential helper to store credentials:
+      ```bash
+      git config --global credential.helper store
+      ```
+
+      **Import errors:** Verify submodules initialized: `git submodule update --init --recursive`
+
+      **Server won't start:** Check port not in use, verify .env file exists with correct configuration
+
+      **LLM connection failed:** Verify LLM_PROVIDER is set correctly and credentials are valid
+
+      **Auth silent failure:** Ensure both client_id AND client_secret are provided when enabling auth
+
+      **Common errors:**
+      - `__main__.__spec__ is None`: Use `main.py` not `__main__.py`
+      - Module not found: Verify submodules initialized
+      - MCP connection failed: Check URL trailing slash
+      - Auth not working: Check both client_id and client_secret are set
+
+      **Test client API issues:**
+      - `AttributeError: 'A2AClient' object has no attribute 'stream'` or `'invoke'`: Use `run_streaming_test()` from `aicoe_agent_utils.a2a.client_utils` instead of direct client methods
+      - Example fix:
+        ```python
+        from aicoe_agent_utils.a2a.client_utils import run_streaming_test
+        await run_streaming_test(client, query)
+        ```
+
+      ---
+
+      ## Quick Reference
+
+      ```bash
+      # Setup
+      git submodule add https://github.ibm.com/AI-CoE/aicoe-agent-utils.git
+      git submodule update --init --recursive
+      python3 -m venv venv && source venv/bin/activate
+      pip install -r requirements.txt
+
+      # Optional: Install AgentOps
+      pip install aicoe-agent-utils[agentops]
+
+      # Configure
+      cp .env.example .env
+      # Edit .env with your credentials
+
+      # Test
+      python3 main.py
+      python3 test_client.py
+      ```
+
+      **Checklist:**
+      - [ ] main.py, config.py, my_agent.py, a2a_factory.py
+      - [ ] requirements.txt with -e ./aicoe-agent-utils[agent]
+      - [ ] .env.example with all configuration options
+      - [ ] .gitignore, .gitmodules
+      - [ ] LLM provider configuration (WatsonX or Ollama)
+      - [ ] MCP server configuration
+      - [ ] Auth flags set to false by default
+      - [ ] AgentOps configuration (optional)
+      - [ ] test_client.py for testing
