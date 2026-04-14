@@ -59,6 +59,69 @@ def _load_sales_df() -> pd.DataFrame:
     return df
 
 
+def _parse_crm_date(date_value) -> dict:
+    """
+    Parse CRM date and return dict with original, parsed, and ISO format.
+    
+    Handles missing dates (NaN, NaT, "nan" strings) gracefully.
+    Missing expiration dates indicate the contract was not signed/won yet.
+    
+    Args:
+        date_value: Date value from CRM (can be string, datetime, NaN, or other)
+        
+    Returns:
+        Dict with 'original', 'parsed' (datetime object), and 'iso' (ISO string) keys
+        Returns None values for missing/invalid dates (expected for unsigned contracts)
+    """
+    from dateutil import parser as date_parser
+    
+    result = {
+        'original': None,
+        'parsed': None,
+        'iso': None
+    }
+    
+    # Check for various forms of missing data BEFORE attempting to parse
+    # 1. pandas NA/NaN/NaT
+    if pd.isna(date_value):
+        return result
+    
+    # 2. pandas NaT (Not a Time) - explicit check
+    if pd.api.types.is_scalar(date_value) and hasattr(pd, 'NaT') and date_value is pd.NaT:
+        return result
+    
+    # 3. String "nan", "NaN", "NaT", or empty strings
+    if isinstance(date_value, str):
+        date_str_lower = date_value.strip().lower()
+        if date_str_lower in ['nan', 'nat', '', 'none', 'n/a']:
+            return result
+    
+    # 4. None value
+    if date_value is None:
+        return result
+    
+    # If we get here, we have a potentially valid date - store original
+    result['original'] = str(date_value)
+    
+    try:
+        # Try to parse the date
+        if isinstance(date_value, str):
+            parsed_date = date_parser.parse(date_value)
+        elif hasattr(date_value, 'to_pydatetime'):
+            # Handle pandas Timestamp
+            parsed_date = date_value.to_pydatetime()
+        else:
+            parsed_date = date_parser.parse(str(date_value))
+        
+        result['parsed'] = parsed_date
+        result['iso'] = parsed_date.strftime('%Y-%m-%d')
+    except Exception as e:
+        # If parsing fails, keep None values (this is expected for invalid data)
+        pass
+    
+    return result
+
+
 @tool
 def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner company"]) -> dict:
     """
@@ -94,14 +157,43 @@ def retrieve_sales_history(partner_name: Annotated[str, "Name of the partner com
             }
 
         opportunities = []
-        for _, row in partner_data.iterrows():
+        for row_num, (idx, row) in enumerate(partner_data.iterrows(), start=1):
+            # Extract numeric amount for comparison
+            amount_value = row['Amount']
+            amount_numeric = None
+            if isinstance(amount_value, (int, float)):
+                amount_numeric = float(amount_value)
+            elif isinstance(amount_value, str):
+                import re
+                amount_match = re.search(r'[\$]?\s*([\d,]+\.?\d*)', str(amount_value))
+                if amount_match:
+                    try:
+                        amount_numeric = float(amount_match.group(1).replace(',', ''))
+                    except ValueError:
+                        pass
+            
+            # Parse dates for better comparison
+            close_date_parsed = _parse_crm_date(row['Close Date'])
+            contract_exp_parsed = _parse_crm_date(row.get('Contract Expiration Date', 'N/A'))
+            
+            # Calculate opportunity number (1-based row number from Excel)
+            # row_num starts at 1 (first data row), which corresponds to Excel row 2
+            # So row_num directly equals the opportunity number (1, 2, 3, ...)
+            opportunity_number = row_num
+            
             opp = {
+                "opportunity_number": opportunity_number,
                 "opportunity_name": row['Opportunity Name'],
                 "owner": row['Owner Full Name'],
                 "stage": row['Stage'],
                 "amount": row['Amount'],
+                "amount_numeric": amount_numeric,
                 "close_date": str(row['Close Date']),
+                "close_date_parsed": close_date_parsed['parsed'],
+                "close_date_iso": close_date_parsed['iso'],
                 "contract_expiration_date": str(row.get('Contract Expiration Date', 'N/A')),
+                "contract_expiration_parsed": contract_exp_parsed['parsed'],
+                "contract_expiration_iso": contract_exp_parsed['iso'],
                 "products": row['Products'],
                 "next_steps": row['Next Steps']
             }
