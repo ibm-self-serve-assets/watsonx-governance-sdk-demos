@@ -110,6 +110,44 @@ class ContractAgent:
             raise ValueError("WATSONX_APIKEY must be provided or set in environment variables")
         if not self.project_id:
             raise ValueError("WATSONX_PROJECT_ID must be provided or set in environment variables")
+    def _canonicalize_products(self, products: List[str]) -> List[str]:
+        """
+        Canonicalize product names for better matching.
+        
+        Key rule: "watsonx as a service" becomes generic "watsonx" for fuzzy matching.
+        The matching agent will handle finding "watsonx" in CRM product fields.
+        
+        Args:
+            products: List of product names from contract
+            
+        Returns:
+            List of canonicalized product names
+        """
+        canonicalized = []
+        
+        for product in products:
+            product_lower = product.lower().strip()
+            
+            # Handle "watsonx as a service" - simplify to generic "watsonx"
+            if product_lower == "watsonx as a service":
+                canonicalized.append("watsonx")
+            # Handle specific watsonx products - keep as is
+            elif "watsonx" in product_lower:
+                canonicalized.append(product)
+            # Handle other products - keep as is
+            else:
+                canonicalized.append(product)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        result = []
+        for p in canonicalized:
+            if p not in seen:
+                seen.add(p)
+                result.append(p)
+        
+        return result
+    
     def _load_cache(self):
         """Load contract cache from JSON file"""
         cache_file = "contracts_cache.json"
@@ -438,13 +476,15 @@ class ContractAgent:
                 "FULL CONTRACT TEXT (first 5000 chars):\n{contract_text}\n\n"
                 "CRITICAL INSTRUCTIONS FOR DATE EXTRACTION:\n"
                 "1. Look for 'Coverage Period' field in the contract (e.g., '05/31/2023-05/31/2026')\n"
-                "2. The end_date is the SECOND date in the Coverage Period (e.g., '05/31/2026' becomes '2026-05-31')\n"
-                "3. DO NOT calculate end_date from start_date + term_length\n"
-                "4. If Coverage Period is not found, look for explicit end date or expiration date\n\n"
+                "2. Extract BOTH dates from Coverage Period:\n"
+                "   - coverage_period_start: FIRST date (e.g., '05/31/2023' becomes '2023-05-31')\n"
+                "   - end_date: SECOND date (e.g., '05/31/2026' becomes '2026-05-31')\n"
+                "3. DO NOT calculate dates from start_date + term_length\n"
+                "4. If Coverage Period is not found, look for explicit dates\n\n"
                 "DATE EXTRACTION EXAMPLES:\n"
-                "- Coverage Period: '01/31/2024-01/31/2025' → end_date='2025-01-31'\n"
-                "- Coverage Period: '07/31/2024-07/31/2026' → end_date='2026-07-31'\n"
-                "- Coverage Period: '05/31/2023-05/31/2026' → end_date='2026-05-31'\n\n"
+                "- Coverage Period: '01/31/2024-01/31/2025' → coverage_period_start='2024-01-31', end_date='2025-01-31'\n"
+                "- Coverage Period: '07/31/2024-07/31/2026' → coverage_period_start='2024-07-31', end_date='2026-07-31'\n"
+                "- Coverage Period: '05/31/2023-05/31/2026' → coverage_period_start='2023-05-31', end_date='2026-05-31'\n\n"
                 "OTHER CRITICAL INSTRUCTIONS:\n"
                 "1. Extract BOTH parties (IBM AND the partner company like Confluent)\n"
                 "2. Extract ALL products as an array - if you see 'watsonx as a Service, watsonx Code Assistant', extract BOTH\n"
@@ -458,6 +498,7 @@ class ContractAgent:
                 "- parties: array of party names (MUST include both IBM and partner)\n"
                 "- effective_date: normalized date (YYYY-MM-DD format)\n"
                 "- start_date: contract start date (YYYY-MM-DD format, same as effective_date)\n"
+                "- coverage_period_start: START DATE from Coverage Period (YYYY-MM-DD format, e.g., '2024-07-31')\n"
                 "- end_date: END DATE from Coverage Period (YYYY-MM-DD format, NOT calculated)\n"
                 "- term_length: normalized duration (e.g., '1 year', '2 years', '3 years')\n"
                 "- amount: total contract value with currency (e.g., '$500,092.80')\n"
@@ -466,7 +507,7 @@ class ContractAgent:
                 "- milestones: array of key milestones\n"
                 "- contract_type: inferred type (e.g., 'ESA', 'Sales Agreement', 'Service Contract')\n"
                 "- risk_level: assessed risk level (Low/Medium/High)\n\n"
-                "IMPORTANT: Extract the EXACT end date from Coverage Period, EXACT dollar amount, and ALL product names.\n"
+                "IMPORTANT: Extract BOTH coverage_period_start and end_date from Coverage Period, EXACT dollar amount, and ALL product names.\n"
                 "Look for phrases like 'Coverage Period', 'committed order value', 'Purchase Commitment', 'Cloud Services', 'watsonx', 'Cognos', 'Effective Date'.\n\n"
                 "Provide ONLY valid JSON, no additional text."
             )
@@ -501,6 +542,39 @@ class ContractAgent:
                 
                 try:
                     structured_summary = json.loads(structured_data)
+                    
+                    # POST-PROCESSING: Canonicalize products for better matching
+                    # WHY: "watsonx as a service" should match ANY watsonx product
+                    if "products" in structured_summary:
+                        original_products = structured_summary["products"]
+                        canonicalized_products = self._canonicalize_products(original_products)
+                        structured_summary["original_products"] = original_products
+                        structured_summary["products"] = canonicalized_products
+                        if original_products != canonicalized_products:
+                            print(f"✓ Canonicalized products: {original_products} → {canonicalized_products}")
+                    
+                    # POST-PROCESSING: Extract numeric amount for comparison
+                    # WHY: CRM has rounded amounts, contracts have exact amounts (±7% tolerance)
+                    if "amount" in structured_summary:
+                        amount_str = str(structured_summary["amount"])
+                        import re
+                        # Extract numeric value from strings like "$500,092.80" or "$500K"
+                        amount_match = re.search(r'[\$]?\s*([\d,]+\.?\d*)\s*([KMB])?', amount_str)
+                        if amount_match:
+                            numeric_str = amount_match.group(1).replace(',', '')
+                            multiplier_str = amount_match.group(2)
+                            
+                            try:
+                                amount_numeric = float(numeric_str)
+                                # Handle K, M, B multipliers
+                                if multiplier_str:
+                                    multipliers = {'K': 1000, 'M': 1000000, 'B': 1000000000}
+                                    amount_numeric *= multipliers.get(multiplier_str, 1)
+                                
+                                structured_summary["amount_numeric"] = amount_numeric
+                                print(f"✓ Extracted numeric amount: ${amount_numeric:,.2f}")
+                            except ValueError:
+                                pass
                     
                     # POST-PROCESSING: Calculate actual end_date if vague
                     # WHY: Contracts show "1 year from effective date" instead of "2025-01-31"
@@ -570,6 +644,24 @@ class ContractAgent:
                             all_products = list(set(products + additional_products))
                             structured_summary["products"] = all_products
                             print(f"✓ Enhanced products list: {all_products}")
+                    
+                    # POST-PROCESSING: Extract coverage_period_start from Coverage Period if missing
+                    # WHY: LLM sometimes only extracts end_date, but we need the start date for matching
+                    if "coverage_period_start" not in structured_summary or not structured_summary.get("coverage_period_start"):
+                        raw_text = state.get("raw_text", "")
+                        import re
+                        from dateutil import parser as date_parser
+                        
+                        # Look for "Coverage Period" pattern like "07/31/2024-07/31/2026"
+                        coverage_match = re.search(r'Coverage Period[:\s]+(\d{1,2}/\d{1,2}/\d{4})-(\d{1,2}/\d{1,2}/\d{4})', raw_text, re.IGNORECASE)
+                        if coverage_match:
+                            try:
+                                start_date_str = coverage_match.group(1)
+                                parsed_start = date_parser.parse(start_date_str)
+                                structured_summary["coverage_period_start"] = parsed_start.strftime("%Y-%m-%d")
+                                print(f"✓ Extracted coverage_period_start from text: {structured_summary['coverage_period_start']}")
+                            except Exception as e:
+                                print(f"Warning: Could not parse coverage_period_start: {e}")
                     
                 except json.JSONDecodeError as e:
                     import re
