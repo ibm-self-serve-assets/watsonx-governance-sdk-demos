@@ -88,6 +88,26 @@ def extract_structured_fields(text, filename=""):
         amount_match = re.search(r'\$[\d,]+\.?\d*', text)
         structured['amount'] = amount_match.group(0) if amount_match else "Not specified"
     
+    # Extract numeric amount for comparison (matching contract_agent.py logic)
+    if structured['amount'] != "Not specified":
+        amount_str = structured['amount']
+        # Extract numeric value from strings like "$500,092.80" or "$500K"
+        numeric_match = re.search(r'[\$]?\s*([\d,]+\.?\d*)\s*([KMB])?', amount_str)
+        if numeric_match:
+            numeric_str = numeric_match.group(1).replace(',', '')
+            multiplier_str = numeric_match.group(2)
+            
+            try:
+                amount_numeric = float(numeric_str)
+                # Handle K, M, B multipliers
+                if multiplier_str:
+                    multipliers = {'K': 1000, 'M': 1000000, 'B': 1000000000}
+                    amount_numeric *= multipliers.get(multiplier_str, 1)
+                
+                structured['amount_numeric'] = amount_numeric
+            except ValueError:
+                pass
+    
     # Extract products from IBM Cloud Subscription table's Product Description column
     products = []
     text_lower = text.lower()
@@ -99,9 +119,9 @@ def extract_structured_fields(text, filename=""):
     if product_desc_match:
         product_text = product_desc_match.group(1).lower()
         
-        # If Product Description includes "IBM watsonx as a Service", extract specific watsonx products
+        # If Product Description includes "IBM watsonx as a Service", categorize as generic "watsonx"
         if "ibm watsonx as a service" in product_text or "watsonx as a service" in product_text:
-            products.extend(["watsonx Orchestrate", "watsonx.governance", "watsonx.ai"])
+            products.append("watsonx")
         
         # Check for Cognos
         if "cognos" in product_text:
@@ -146,12 +166,20 @@ def extract_structured_fields(text, filename=""):
     else:
         structured['term_length'] = "Not specified"
     
-    # CRITICAL: Extract end_date from Coverage Period field (NOT calculated from start + term)
-    # Coverage Period format: "MM/DD/YYYY-MM/DD/YYYY" where second date is the end date
+    # CRITICAL: Extract BOTH coverage_period_start and end_date from Coverage Period field
+    # Coverage Period format: "MM/DD/YYYY-MM/DD/YYYY" where:
+    #   - First date is coverage_period_start (when contract starts/was signed)
+    #   - Second date is end_date (when contract expires)
     # In tables, the date is in a separate row from the header, so just search for the date pattern
     coverage_period_match = re.search(r'(\d{2}/\d{2}/\d{4})-(\d{2}/\d{2}/\d{4})', text)
     if coverage_period_match:
-        end_date_str = coverage_period_match.group(2)  # Second date is end date
+        start_date_str = coverage_period_match.group(1)  # First date is coverage start
+        end_date_str = coverage_period_match.group(2)    # Second date is end date
+        try:
+            coverage_start = datetime.strptime(start_date_str, "%m/%d/%Y")
+            structured['coverage_period_start'] = coverage_start.strftime("%Y-%m-%d")
+        except:
+            structured['coverage_period_start'] = "Not specified"
         try:
             end_date = datetime.strptime(end_date_str, "%m/%d/%Y")
             structured['end_date'] = end_date.strftime("%Y-%m-%d")
