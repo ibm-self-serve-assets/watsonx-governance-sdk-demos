@@ -1,9 +1,0 @@
-langchain>=0.2.14
-langchain-core
-langchain-community>=0.3.30
-langchain-openai>=0.1.22
-langchain-tavily>=0.1
-langgraph>=0.6.6
-pymupdf>=1.26.4
-qdrant-client>=1.15.1
-tiktoken>=0.12.0

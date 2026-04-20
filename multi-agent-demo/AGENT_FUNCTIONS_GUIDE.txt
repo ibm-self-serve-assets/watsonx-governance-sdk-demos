@@ -52,7 +52,7 @@ Example: First run reads file → Saves to cache → Next runs load from cache i
 _extract_contract_metadata(text, filename)
 What it does: Finds important details in the contract text
 Simple explanation: Looks through the contract to find the partner name, start date, end date, products, and dollar amounts
-Example: From contract text → Extracts "Partner: Confluent, Start: 2023-01-30, End: 2025-01-30, Amount: $250,000"
+Example: From contract text → Extracts "Partner: Confluent, Start: 2023-01-30, End: 2026-05-31, Amount: $1,000,026.00"
 
 normalize_and_structure_node()
 What it does: Extracts structured business fields from contracts
@@ -81,14 +81,14 @@ Output Structure:
     {
       "file_name": "Confluent_IBM-1.30.2025.docx",
       "structured_summary": {
-        "amount": "$500,092.80",
-        "products": ["watsonx as a Service", "watsonx Orchestrate"],
-        "start_date": "2025-01-31",
+        "amount": "$250,000.00",
+        "products": ["watsonx Orchestrate", "watsonx.governance", "watsonx.ai"],
+        "start_date": "2024-01-31",
         "end_date": "2026-01-31",
-        "term_length": "1 year(s)"
+        "term_length": "2 year(s)"
       },
       "status": "expired",
-      "days_to_end": -68
+      "days_to_end": -72
     }
   ]
 }
@@ -104,12 +104,12 @@ Key Functions:
 search_pre_acquisition_executives(partner_name)
 What it does: Searches the web for executive names before IBM acquired the company
 Simple explanation: Finds who the CPO, CTO, CEO, CFO, and VPs were at the partner company
-Example: Searches for Confluent executives → Returns "CPO: John Smith, CTO: Jane Doe"
+Example: Searches for Confluent executives → Returns "CPO: Shaun Clowes, CTO: Stephen Deasy, CEO: Jay Kreps, CFO: Rohan Sivaram"
 
 search_revenue_and_growth(partner_name)
 What it does: Searches for financial performance data
 Simple explanation: Finds how much money the company is making and if they're growing
-Example: Searches for Confluent revenue → Returns "$298.5M revenue, 19% growth"
+Example: Searches for Confluent revenue → Returns "$1.167B revenue in 2025, up from $963.6M"
 
 search_key_announcements(partner_name)
 What it does: Searches for recent news and product launches
@@ -133,20 +133,28 @@ Output Structure:
     "sales_history": {
       "opportunities": [
         {
+          "opportunity_number": 6,  # NEW: Excel row number (1-12) for tracking
           "opportunity_name": "Confluent watsonx ESA Renewal",
           "owner": "Anand Das",
           "stage": "Qualified",
           "amount": 250000,
-          "next_steps": "sizing in progress"
+          "next_steps": "sizing in progress",
+          "contract_expiration_date": "1/31/2026"
         }
       ]
     }
   },
   "external_data": {
-    "executives": "CPO: John Smith, CTO: Jane Doe...",
-    "revenue": "$298.5M",
-    "growth": "19%"
+    "executives": "CPO: Shaun Clowes, CTO: Stephen Deasy, CEO: Jay Kreps, CFO: Rohan Sivaram",
+    "revenue": "$1.167B in 2025",
+    "growth": "21% YoY"
   }
+
+IMPORTANT UPDATE (2026-04-14):
+- Added opportunity_number field to track Excel row numbers (1-12)
+- This allows matching output to show "CRM #1: Confluent Cognos" format
+- Calculated as sequential row number from Excel file (header = row 1, data starts row 2)
+- Used throughout matching and action agents for clear opportunity identification
 }
 
 ================================================================================
@@ -160,17 +168,19 @@ Key Functions:
 _extract_product_from_filename(filename)
 What it does: Figures out what product a contract is for based on the filename
 Simple explanation: Looks at the filename and identifies the product
-Example: "Confluent_IBM-1.30.2025.docx" → Checks content → Identifies "watsonx" product
+Example: "Confluent_IBM-1.30.2025.docx" → Checks content → Identifies "watsonx" products
 
 _match_with_llm(contract, opportunities)
 What it does: Uses WatsonxLLM to intelligently match a contract to CRM opportunities
 Simple explanation: Sends contract and CRM data to an AI model that understands semantic relationships and product families
 Matching Criteria:
   - Product/service alignment with semantic understanding (e.g., "watsonx ESA" matches "watsonx as a Service")
-  - Dollar amount proximity (within reasonable range)
+  - Dollar amount proximity (within reasonable range, 7% tolerance for expired contracts)
   - Timeline alignment (contract dates vs opportunity close dates)
   - Product family relationships (understands Cognos Analytics is part of Cognos family)
-Example: Contract "watsonx ESA $250K" + CRM "watsonx as a Service Renewal $250K" → LLM recognizes semantic match → Returns confidence "high" with reasoning
+  - Contract Expiration Date from CRM for better matching
+  - Special logic for EXPIRED contracts: looks for ACTIVE opportunities with "renewal" keywords
+Example: Expired contract "watsonx ESA $250K" + CRM "watsonx as a Service Renewal $250K" → LLM recognizes semantic match → Returns confidence "high" with reasoning
 
 _fallback_string_match(contract, opportunities)
 What it does: Backup matching method using simple string matching if LLM fails
@@ -187,12 +197,13 @@ New Features:
   - Analyzes CRM stages: Lost = FAILED, Won = CONTRACT SIGNED, Other = ACTIVE ENGAGEMENT
   - Flags active_engagement status
   - Generates urgent alerts for contracts without CRM tracking
-Example: Contract expired 68 days ago with NO CRM → Returns urgency_message: "🚨 URGENT: Contract EXPIRED 68 days ago with NO CRM tracking!"
+  - Deduplication logic to prevent counting same contract multiple times
+Example: Contract expired 72 days ago with NO CRM → Returns urgency_message: "🚨 URGENT: Contract EXPIRED 72 days ago with NO CRM tracking!"
 
 run(contract_portfolio, crm_opportunities)
 What it does: Main function that creates the enhanced correlation report with renewal analysis
 Simple explanation: Compares all contracts to all CRM opportunities, calculates urgency, identifies gaps, and creates actionable alerts
-Example: 4 contracts + 2 opportunities → Returns "2 matched (1 active engagement), 2 unmatched (1 CRITICAL - expired without CRM)"
+Example: 4 contracts + 5 opportunities → Returns "3 matched (2 active engagement), 1 unmatched (1 CRITICAL - expired without CRM)"
 
 Output Structure:
 {
@@ -200,11 +211,11 @@ Output Structure:
     {
       "contract": {...},
       "contract_product": "watsonx",
-      "contract_value": "$500,092.80",
+      "contract_value": "$250,000.00",
       "contract_end": "2026-01-31",
       "contract_status": "expired",
       "is_renewal": true,
-      "days_until_renewal": -68,
+      "days_until_renewal": -72,
       "renewal_urgency": "EXPIRED",
       "opportunities": [{...}],
       "match_confidence": "high",
@@ -222,10 +233,10 @@ Output Structure:
       "contract_product": "Cognos",
       "contract_status": "expired",
       "is_renewal": false,
-      "days_until_renewal": -800,
+      "days_until_renewal": -1139,
       "renewal_urgency": "EXPIRED",
       "reason": "No matching CRM opportunity found",
-      "urgency_message": "🚨 URGENT: Contract EXPIRED 800 days ago with NO CRM tracking!",
+      "urgency_message": "🚨 URGENT: Contract EXPIRED 1139 days ago with NO CRM tracking!",
       "action_required": "CREATE CRM OPPORTUNITY IMMEDIATELY"
     }
   ]
@@ -242,7 +253,7 @@ Key Functions:
 calculate_urgency(contract)
 What it does: Determines how urgent a contract situation is based on dates
 Simple explanation: Figures out if a contract is expired (and by how many days) or expiring soon
-Example: Contract ended 1/31/2026, today is 4/8/2026 → Returns "EXPIRED 68 days ago, urgency level: CRITICAL"
+Example: Contract ended 1/31/2026, today is 4/13/2026 → Returns "EXPIRED 72 days ago, urgency level: CRITICAL"
 
 find_matching_data_for_contract(contract, matched_contracts)
 What it does: Finds the CRM opportunity that matches a specific contract
@@ -255,18 +266,20 @@ Simple explanation: Figures out if contract is for watsonx.ai, watsonx.governanc
 Example: "Confluent_IBM-1.30.2025.docx" → Returns ["watsonx Orchestrate", "watsonx.governance", "watsonx.ai"]
 
 extract_executive_info(partner_profile, role)
-What it does: Finds the actual name of the CPO, CTO, or CEO from research, with HARD-CODED Confluent CPO
-Simple explanation: Looks through research data to find executive names, automatically returns "Shaun Clowes" for Confluent CPO
+What it does: Finds the actual name of the CPO, CTO, CEO, or CFO from research, with HARD-CODED Confluent executives
+Simple explanation: Looks through research data to find executive names, automatically returns correct names for Confluent
 Example: Confluent + CPO role → Returns {"name": "Shaun Clowes", "role": "CPO", "note": "Pre-acquisition executive"}
-Example: Other partner + CPO → Searches research data for CPO name
+Example: Confluent + CTO role → Returns {"name": "Stephen Deasy", "role": "CTO", "note": "Pre-acquisition executive"}
+Example: Confluent + CEO role → Returns {"name": "Jay Kreps", "role": "CEO", "note": "Pre-acquisition executive"}
+Example: Confluent + CFO role → Returns {"name": "Rohan Sivaram", "role": "CFO", "note": "Pre-acquisition executive"}
 
 extract_contract_signers(contract)
-What it does: NEW - Extracts previous contract signers and key people from contract parties
+What it does: Extracts previous contract signers and key people from contract parties
 Simple explanation: Identifies who signed the previous contract for follow-up outreach
 Example: Contract parties include "John Smith, Jane Doe" → Returns ["John Smith", "Jane Doe"]
 
 detect_expansion_opportunity(contract, crm_match)
-What it does: NEW - Analyzes if there's an upsell/expansion opportunity
+What it does: Analyzes if there's an upsell/expansion opportunity
 Simple explanation: Checks if CRM opportunity value is higher than contract, looks for expansion keywords, identifies single-product contracts
 Expansion Signals:
   - CRM opportunity 20%+ higher than contract value
@@ -276,7 +289,7 @@ Expansion Signals:
 Example: Contract $250K, CRM opportunity $500K → Returns {"can_expand": true, "signals": ["CRM opportunity 100% higher"], "recommendation": "Explore expansion opportunities"}
 
 analyze_why_expired(contract, crm_match)
-What it does: NEW - Root cause analysis of why a contract expired
+What it does: Root cause analysis of why a contract expired
 Simple explanation: Investigates why contract expired - no outreach, lost deal, timing gap, or natural expiration
 Analysis Logic:
   - No CRM match → "No one reached out - no proactive engagement"
@@ -284,6 +297,20 @@ Analysis Logic:
   - CRM stage "Won" → "Natural expiration after successful engagement"
   - Active engagement → "Timing gap - discussions ongoing but contract lapsed"
 Example: Expired contract with no CRM → Returns {"primary_reason": "No proactive outreach", "action": "URGENT: Create CRM opportunity and reach out immediately"}
+
+detect_renewal_chains(all_contracts) **NEW FUNCTION (2026-04-14)**
+What it does: Identifies renewal series and filters out old contracts that have been renewed
+Simple explanation: Groups contracts by product, finds renewal chains, and keeps only the MOST RECENT contract in each series
+Why it matters: Prevents recommending action on old expired contracts that have already been renewed
+Logic:
+  - Groups contracts by product (e.g., all watsonx contracts together)
+  - Sorts by end date (most recent first)
+  - Keeps only the most recent contract in each group
+  - Filters out older contracts in the renewal chain
+Example:
+  Input: [1.30.2024 contract (expired 438 days), 1.30.2025 contract (expired 73 days)]
+  Output: [1.30.2025 contract] - filters out the older 1.30.2024 contract
+  Logs: "🔄 Renewal chain detected for watsonx: 1.30.2025 → MOST RECENT, 1.30.2024 (older, filtered out)"
 
 determine_recipient(contract, crm_match, query, partner_profile)
 What it does: Decides who should receive the email based on context
@@ -298,9 +325,9 @@ Example Output:
 """
 CONTRACT: Confluent_IBM-1.30.2025.docx
 - Product(s): watsonx Orchestrate, watsonx.governance, watsonx.ai
-- Value: $500,092.80
+- Value: $250,000.00
 - Previous Signers: John Smith, Jane Doe
-- Status: EXPIRED (68 days ago)
+- Status: EXPIRED (72 days ago)
 - End Date: 1/31/2026
 
 CRM LINKAGE:
@@ -325,7 +352,7 @@ EXPANSION OPPORTUNITY ANALYSIS:
 - Recommendation: Explore expansion opportunities during renewal discussion
 
 URGENCY ANALYSIS:
-- Contract expired 68 days ago
+- Contract expired 72 days ago
 - $250,000 renewal opportunity at risk
 - Customer actively sizing - positive engagement signal
 - Competitor could enter during gap period
@@ -350,7 +377,7 @@ WHY THIS MATTERS:
 """
 
 create_artifacts_node(state)
-What it does: Generates ready-to-send emails addressed to actual executives (including hard-coded Shaun Clowes for Confluent) and updates CRM
+What it does: Generates ready-to-send emails addressed to actual executives (including hard-coded Confluent executives) and updates CRM
 Simple explanation: Writes professional email with contract context, expansion opportunities, and updates CRM with next steps
 Example: Creates email starting with "Dear Shaun Clowes," including specific contract details, expansion opportunities, and previous signers
          Updates CRM with {"next_steps": ["Contact Anand Das TODAY", "Review sizing progress", "Discuss expansion opportunities"]}
@@ -366,11 +393,11 @@ Output Structure:
     "reasoning": "CONTRACT: ... CRM LINKAGE: ... URGENCY: ...",
     "priority": 100,
     "recipient_info": {
-      "name": "John Smith",
+      "name": "Shaun Clowes",
       "role": "CPO"
     }
   },
-  "draft_email": "Dear John Smith, ...",
+  "draft_email": "Dear Shaun Clowes, ...",
   "crm_updates": {
     "next_steps": ["Contact Anand Das TODAY", "Review sizing progress"],
     "crm_file_updated": true
@@ -380,6 +407,87 @@ Output Structure:
     "risk_score": 75
   }
 }
+
+================================================================================
+
+6. EMAIL EDITING (Interactive Workflow - workflow_in_steps.ipynb)
+
+Purpose: Allow users to iteratively refine draft emails generated by the Action Agent.
+
+Key Functions:
+
+clean_email_output(email_text)
+What it does: Post-processes LLM-generated email to remove artifacts and ensure clean formatting
+Simple explanation: Cleans up the email by removing markdown, duplicate lines, and extra content after signature
+Example: Raw LLM output with "```" and repeated text → Clean email with single version ending at "IBM Seller"
+
+Processing Steps:
+1. Strip whitespace
+2. Remove markdown code blocks (```)
+3. Extract content starting from "Subject:"
+4. Cut at first "IBM Seller" signature
+5. Remove duplicate consecutive lines
+6. Reduce excessive blank lines (max 2)
+7. Final trim
+
+Email Editing Workflow:
+1. User reviews draft email from Action Agent
+2. User provides edit request (e.g., "make it more urgent", "add deadline")
+3. LLM receives original email + edit request
+4. LLM generates edited version
+5. Post-processing cleans output
+6. User receives single, clean email
+
+Common Edit Requests:
+- "Make it more urgent" → Adds urgency language and time pressure
+- "Add a deadline of April 15th" → Includes specific deadline in subject and body
+- "Make it shorter" → Condenses to key points only
+- "Make it more friendly" → Softens tone while maintaining professionalism
+- "Add bullet points" → Formats key items as bulleted list
+- "Add mention of [topic]" → Incorporates specific topic naturally
+
+Example Usage:
+```python
+# Original email from Action Agent
+initial_email = my_result.get("action_recommendation", {}).get("draft_email", "")
+
+# User's edit request
+followup_query = "Can you make the email more urgent and add a specific deadline of April 15th?"
+
+# LLM generates edited version
+edited_email = llm.invoke(formatted_prompt)
+
+# Post-processing cleans output
+edited_email_text = clean_email_output(edited_email.content)
+```
+
+Output Structure:
+```
+Subject: URGENT: Contract Renewal Required by April 15th
+
+Dear [Recipient],
+
+[Email body with requested changes]
+
+Best regards,
+[Your Name]
+IBM Seller
+```
+
+CRITICAL IMPLEMENTATION NOTES:
+- Stop sequences ["```", "\n\n\n\n"] prevent markdown and excessive whitespace
+- Post-processing is REQUIRED - LLMs may generate extra content despite instructions
+- Regex extraction ensures clean start from "Subject:"
+- Signature detection prevents repeated signatures or trailing content
+- Duplicate line removal prevents phrase repetition
+- Import `re` module for regex operations
+
+Troubleshooting:
+- Multiple email versions → Post-processing extracts first only
+- Text after signature → Signature detection cuts at "IBM Seller"
+- Repeated phrases → Duplicate line removal handles this
+- Markdown artifacts → Stop sequences + post-processing remove them
+- Preamble text → Regex starts from "Subject:"
 
 ================================================================================
 
@@ -395,30 +503,34 @@ Example Workflow:
    - Checks cache first (instant if cached)
    - Reads 4 Confluent contract files if not cached
    - Extracts structured data: amount, products, dates, term length
-   - Parses end_date from contracts
+   - Parses end_date from Coverage Period field in contract tables
+   - Extracts products from IBM Cloud Subscription table's Product Description column
    - Categorizes: "1 expired (watsonx-2025), 2 active, 1 renewal coming"
    - Returns portfolio with all contract details
 
 4. Research Agent:
    - Searches web for company information
-   - Finds executives: "CPO: John Smith, CTO: Jane Doe, CEO: Jay Kreps"
-   - Reads CRM: "2 won deals, $1.25M total, Kylie and Anand are owners"
+   - Finds executives: "CPO: Shaun Clowes, CTO: Stephen Deasy, CEO: Jay Kreps, CFO: Rohan Sivaram"
+   - Reads CRM: "5 opportunities, $1.65M total, Kylie and Anand are owners"
    - Returns partner profile with CRM opportunities and executive names
 
 5. Matching Agent:
    - Takes contracts from Contract Agent
    - Takes CRM opportunities from Research Agent
    - Matches: "watsonx-2025 contract → Confluent watsonx ESA Renewal (Anand Das)"
+   - Uses LLM with Contract Expiration Date context for better matching
+   - Special logic for expired contracts to find active renewal opportunities
    - Enriches matches with all contract + CRM fields
-   - Returns: "2 matched, 2 unmatched contracts"
+   - Deduplicates to prevent counting same contract twice
+   - Returns: "3 matched, 1 unmatched contracts"
 
 6. Action Agent:
    - Receives matched contracts with CRM data
-   - Calculates: "watsonx contract expired 68 days ago - CRITICAL urgency"
+   - Calculates: "watsonx contract expired 72 days ago - CRITICAL urgency"
    - Extracts: "Owner: Anand Das, Next steps: sizing in progress"
-   - Determines: "Email recipient: John Smith (CPO)" from research data
+   - Determines: "Email recipient: Shaun Clowes (CPO)" from hard-coded Confluent data
    - Creates: Detailed reasoning with all context
-   - Generates: Draft email to "Dear John Smith," with specific contract details
+   - Generates: Draft email to "Dear Shaun Clowes," with specific contract details
    - Recommends: "Contact Anand Das TODAY, review sizing progress"
    - Updates CRM: {"next_steps": ["Contact Anand Das TODAY", "Review sizing"]}
 
@@ -468,27 +580,77 @@ Contract Cache: contracts_cache.json
 
 ================================================================================
 
+CRITICAL IMPLEMENTATION DETAILS
+
+1. CONTRACT DATE EXTRACTION (cache_contracts.py):
+   - Dates are extracted from "Coverage Period" field in contract tables
+   - Format: MM/DD/YYYY-MM/DD/YYYY (e.g., "01/31/2024-01/31/2026")
+   - Second date is the end_date (expiration date)
+   - DO NOT calculate end_date as start_date + term_length
+
+2. PRODUCT EXTRACTION (cache_contracts.py):
+   - Products are extracted from "IBM Cloud Subscription" table
+   - Look at "Product Description" column
+   - If "IBM watsonx as a Service" appears: extract ["watsonx Orchestrate", "watsonx.governance", "watsonx.ai"]
+   - Also check for "Cognos" in product description
+
+3. EXECUTIVE NAMES (action_agent.py):
+   - Confluent executives are HARD-CODED:
+     - CPO: Shaun Clowes
+     - CTO: Stephen Deasy
+     - CEO: Jay Kreps
+     - CFO: Rohan Sivaram
+   - These are pre-acquisition executives (before IBM acquisition)
+
+4. CONTRACT DEDUPLICATION (matching_agent.py):
+   - Uses seen_files set to track processed contracts
+   - Prevents counting same contract multiple times
+   - Ensures accurate contract counts
+
+5. EXPIRED CONTRACT FILTER (contract_agent.py):
+   - Captures ALL expired contracts (days_to_end < 0)
+   - NOT limited to last 90 days
+   - Ensures no expired contracts are missed
+
+6. CONTRACT-CRM MATCHING (matching_agent.py):
+   - LLM receives Contract Expiration Date from CRM for context
+   - Special logic for expired contracts:
+     - Looks for ACTIVE opportunities (Qualify/Design/Engage/Negotiate)
+     - Matches on product, amount (within 7%), and "renewal" keywords
+   - Helps match expired contracts to active renewal opportunities
+
+================================================================================
+
 TROUBLESHOOTING
 
 Q: Why is the Action Agent not showing CRM owner names?
 A: Check that Research Agent successfully read the CRM Excel file and Matching Agent found matches.
 
 Q: Why are email recipients generic (e.g., "CPO") instead of names?
-A: Check that Research Agent's Tavily search found executive information in the external_data.
+A: For Confluent, names should be hard-coded (Shaun Clowes, Stephen Deasy, Jay Kreps, Rohan Sivaram). For other partners, check that Research Agent's Tavily search found executive information.
 
 Q: Why is urgency calculation missing?
-A: Check that contracts have valid end_date fields in ISO format (YYYY-MM-DD) or parseable date formats.
+A: Check that contracts have valid end_date fields in ISO format (YYYY-MM-DD) extracted from Coverage Period.
 
 Q: Why are contracts not matching to CRM opportunities?
-A: Check that product names in contracts match opportunity names in CRM (e.g., "watsonx" in both).
+A: Check that product names in contracts match opportunity names in CRM. LLM should handle semantic matching (e.g., "watsonx ESA" matches "watsonx as a Service").
 
-Q: Why are contracts showing as 0 active/0 expired?
-A: Check that contract end_date is being parsed correctly from structured_summary.
+Q: Why are contracts showing wrong counts (e.g., 5 instead of 4)?
+A: Check deduplication logic in matching_agent.py - ensure seen_files set is working correctly.
 
-Q: Why is CRM showing "agent_next_steps" instead of "next_steps"?
-A: Ensure you're using the current version of action_agent.py which uses "next_steps" consistently.
+Q: Why are some expired contracts not showing up?
+A: Check expired contract filter in contract_agent.py - should capture ALL contracts with days_to_end < 0, not just last 90 days.
+
+Q: Why are contract dates wrong?
+A: Check that cache_contracts.py is extracting dates from Coverage Period field, not calculating from start_date + term_length.
+
+Q: Why are products wrong or missing?
+A: Check that cache_contracts.py is extracting from IBM Cloud Subscription table's Product Description column, and correctly identifying watsonx and Cognos products.
+
+Q: Why aren't expired contracts matching to renewal opportunities?
+A: Check that matching_agent.py is using Contract Expiration Date from CRM and has special logic for expired contracts to find active renewal opportunities.
 
 ================================================================================
 
-LAST UPDATED: 2026-04-09
-VERSION: 4.0 - Enhanced with renewal tracking, CRM stage analysis, expansion detection, root cause analysis, and hard-coded Confluent CPO
+LAST UPDATED: 2026-04-20
+VERSION: 6.0 - Added email quality controls (word repetition prevention, CRM note paraphrasing), removed all emojis from outputs, cleaned up notebook comments. Updated with Coverage Period extraction, IBM Cloud Subscription product extraction, deduplication logic, all expired contracts filter, enhanced matching with Contract Expiration Date, and complete Confluent executive team.

@@ -4,7 +4,7 @@ Supervisory Agent - Orchestrates Contract, Research, and Action agents
 This agent:
 1. Interprets seller intent from natural language query
 2. Identifies required agents based on the workflow
-3. Executes agents in sequence: Contract → Research → Action
+3. Executes agents in sequence: Contract -> Research -> Action
 4. Aggregates context and passes between agents
 5. Returns final result with next best action to seller
 """
@@ -228,9 +228,9 @@ class SupervisoryAgent:
             if not partner_name and state.get("partner_name"):
                 partner_name = state["partner_name"]
             
-            print(f"\nIntent Analysis:")
-            print(intent_data.get('raw_interpretation', 'No interpretation'))
-            print(f"\nRequired Agents: {', '.join(required_agents)}")
+            # Consolidated intent analysis output - show only once, concisely
+            print(f"\nWorkflow Type: {workflow_type}")
+            print(f"Required Agents: {', '.join(required_agents)}")
             print(f"Partner Name: {partner_name or 'To be extracted from contract'}")
             
             return {
@@ -327,10 +327,6 @@ class SupervisoryAgent:
             contract_summary = state.get("contract_summary", {})
             partner_profile = state.get("partner_profile", {})
             
-            print(f"\nDEBUG - Supervisory Agent passing to Matching Agent:")
-            print(f"  contract_summary keys: {list(contract_summary.keys()) if contract_summary else 'None'}")
-            print(f"  partner_profile keys: {list(partner_profile.keys()) if partner_profile else 'None'}")
-            
             if not contract_summary:
                 return {
                     "matching_data": {"error": "Missing contract context"},
@@ -347,14 +343,7 @@ class SupervisoryAgent:
                 internal_data = partner_profile.get("internal_data", {})
                 sales_history = internal_data.get("sales_history", {})
                 
-                print(f"DEBUG - internal_data keys: {list(internal_data.keys()) if internal_data else 'None'}")
-                print(f"DEBUG - sales_history keys: {list(sales_history.keys()) if sales_history else 'None'}")
-                
                 crm_opportunities = sales_history.get("opportunities", [])
-                print(f"DEBUG - CRM opportunities extracted: {len(crm_opportunities)}")
-                
-                if crm_opportunities and len(crm_opportunities) > 0:
-                    print(f"DEBUG - First opportunity keys: {list(crm_opportunities[0].keys())}")
                 
                 # Run Matching Agent
                 result = self.matching_agent.run(
@@ -562,11 +551,19 @@ class SupervisoryAgent:
                     ])
                     
                     for i, opp in enumerate(opportunities, 1):
+                        # Format amount safely - handle both numeric and string values
+                        amount = opp.get('amount', 0)
+                        if isinstance(amount, (int, float)):
+                            amount_str = f"${amount:,.0f}"
+                        else:
+                            # Amount is already a string like "$1,000,000.00"
+                            amount_str = str(amount) if amount else "$0"
+                        
                         output_parts.extend([
                             f"{i}. {opp.get('opportunity_name', 'Unknown')}",
                             f"   Owner: {opp.get('owner', 'Unknown')}",
                             f"   Stage: {opp.get('stage', 'Unknown')}",
-                            f"   Amount: ${opp.get('amount', 0):,}",
+                            f"   Amount: {amount_str}",
                             f"   Close Date: {opp.get('close_date', 'Unknown')}",
                             f"   Products: {opp.get('products', 'Unknown')}",
                             f"   Next Steps: {opp.get('next_steps', 'None specified')}",
@@ -589,14 +586,15 @@ class SupervisoryAgent:
                         output_parts.append("MATCHED CONTRACTS:")
                         for match in matched:
                             contract_file = match.get("contract", {}).get("file_name", "Unknown")
-                            product = match.get("product", "Unknown")
+                            product = match.get("contract_product", "Unknown")
                             opps = match.get("opportunities", [])
                             
-                            output_parts.append(f"\n  • {contract_file} ({product})")
+                            output_parts.append(f"\n  - {contract_file} ({product})")
                             for opp in opps:
+                                opp_num = opp.get('opportunity_number', '?')
                                 output_parts.extend([
-                                    f"    → CRM: {opp.get('opportunity_name', 'Unknown')}",
-                                    f"      Owner: {opp.get('owner', 'Unknown')}",
+                                    f"    -> CRM #{opp_num}: {opp.get('opportunity_name', 'Unknown')}",
+                                    f"       Owner: {opp.get('owner', 'Unknown')}",
                                     f"      Next Steps: {opp.get('next_steps', 'None')}"
                                 ])
                         output_parts.append("")
@@ -605,8 +603,8 @@ class SupervisoryAgent:
                         output_parts.append("UNMATCHED CONTRACTS (No CRM Entry):")
                         for unmatch in unmatched:
                             contract_file = unmatch.get("contract", {}).get("file_name", "Unknown")
-                            product = unmatch.get("product", "Unknown")
-                            output_parts.append(f"  • {contract_file} ({product})")
+                            product = unmatch.get("contract_product", "Unknown")
+                            output_parts.append(f"  - {contract_file} ({product})")
                         output_parts.append("")
                 
                 # Recommended Next Steps

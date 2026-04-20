@@ -31,10 +31,20 @@ DELAY_BETWEEN_CONTRACTS = 15  # Wait 15 seconds between LLM calls
 
 
 def extract_text_from_docx(file_path):
-    """Extract text from DOCX without using LLM"""
+    """Extract text from DOCX including tables"""
     try:
         doc = Document(file_path)
-        text = "\n".join([para.text for para in doc.paragraphs])
+        
+        # Extract paragraph text
+        text_parts = [para.text for para in doc.paragraphs]
+        
+        # Extract table text
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    text_parts.append(cell.text)
+        
+        text = "\n".join(text_parts)
         return text
     except Exception as e:
         print(f"  Error extracting from {file_path}: {e}")
@@ -55,11 +65,18 @@ def extract_text_from_pdf(file_path):
         return None
 
 
-def extract_structured_fields(text):
+def extract_structured_fields(text, filename=""):
     """
     Extract structured fields from contract text using regex (no LLM).
     This is a fast fallback that works without API calls.
+    
+    Args:
+        text: Contract text content
+        filename: Contract filename (used for fallback party extraction)
     """
+    from dateutil.relativedelta import relativedelta
+    from dateutil.parser import parse as parse_date
+    
     structured = {}
     
     # Extract amount - look for "committed order value of $X"
@@ -71,42 +88,134 @@ def extract_structured_fields(text):
         amount_match = re.search(r'\$[\d,]+\.?\d*', text)
         structured['amount'] = amount_match.group(0) if amount_match else "Not specified"
     
-    # Extract products
+    # Extract numeric amount for comparison (matching contract_agent.py logic)
+    if structured['amount'] != "Not specified":
+        amount_str = structured['amount']
+        # Extract numeric value from strings like "$500,092.80" or "$500K"
+        numeric_match = re.search(r'[\$]?\s*([\d,]+\.?\d*)\s*([KMB])?', amount_str)
+        if numeric_match:
+            numeric_str = numeric_match.group(1).replace(',', '')
+            multiplier_str = numeric_match.group(2)
+            
+            try:
+                amount_numeric = float(numeric_str)
+                # Handle K, M, B multipliers
+                if multiplier_str:
+                    multipliers = {'K': 1000, 'M': 1000000, 'B': 1000000000}
+                    amount_numeric *= multipliers.get(multiplier_str, 1)
+                
+                structured['amount_numeric'] = amount_numeric
+            except ValueError:
+                pass
+    
+    # Extract products from IBM Cloud Subscription table's Product Description column
     products = []
-    if "watsonx" in text.lower():
-        if "orchestrate" in text.lower():
-            products.append("watsonx Orchestrate")
-        if "governance" in text.lower():
-            products.append("watsonx.governance")
-        if "watsonx as a service" in text.lower() or "watsonx.ai" in text.lower():
-            products.append("watsonx as a Service")
-        if not products:
-            products.append("watsonx ESA")
-    if "cognos" in text.lower():
-        products.append("Cognos")
-    structured['products'] = products if products else ["Not specified"]
+    text_lower = text.lower()
+    
+    # Look for IBM Cloud Subscription table and Product Description
+    # The table structure has "Product Description" as a header
+    product_desc_match = re.search(r'product description[:\s]+(.*?)(?:quantity|$)', text, re.IGNORECASE | re.DOTALL)
+    
+    if product_desc_match:
+        product_text = product_desc_match.group(1).lower()
+        
+        # If Product Description includes "IBM watsonx as a Service", categorize as generic "watsonx"
+        if "ibm watsonx as a service" in product_text or "watsonx as a service" in product_text:
+            products.append("watsonx")
+        
+        # Check for Cognos
+        if "cognos" in product_text:
+            products.append("Cognos")
+    
+    # Fallback: if no products found in table, search entire text
+    if not products:
+        if "watsonx" in text_lower:
+            if "orchestrate" in text_lower:
+                products.append("watsonx Orchestrate")
+            if "governance" in text_lower or "watsonx.governance" in text_lower:
+                products.append("watsonx.governance")
+            if "watsonx.ai" in text_lower or "watsonx ai" in text_lower:
+                products.append("watsonx.ai")
+            if "watsonx.data" in text_lower or "watsonx data" in text_lower:
+                products.append("watsonx.data")
+            if "watsonx as a service" in text_lower:
+                products.extend(["watsonx Orchestrate", "watsonx.governance", "watsonx.ai"])
+            if "code assistant" in text_lower:
+                products.append("watsonx Code Assistant")
+            # Only add generic if no specific products found
+            if not products:
+                products.append("watsonx ESA")
+        
+        if "cognos" in text_lower:
+            products.append("Cognos")
+    
+    # Remove duplicates while preserving order
+    products = list(dict.fromkeys(products))
+    structured['products'] = products if products else ["Unknown"]
     
     # Extract dates
     effective_date_match = re.search(r'effective as (\w+ \d{1,2}, \d{4})', text, re.IGNORECASE)
-    structured['start_date'] = effective_date_match.group(1) if effective_date_match else "Not specified"
+    start_date_str = effective_date_match.group(1) if effective_date_match else "Not specified"
+    structured['start_date'] = start_date_str
     
     # Extract term length
     term_match = re.search(r'term of this TD will be (\w+) \((\d+)\) years? from the Effective Date', text, re.IGNORECASE)
     if term_match:
-        term_years = term_match.group(2)
+        term_years = int(term_match.group(2))
         structured['term_length'] = f"{term_years} year(s)"
-        structured['end_date'] = f"{term_years} year(s) from effective date"
     else:
         structured['term_length'] = "Not specified"
-        structured['end_date'] = "Not specified"
     
-    # Extract parties
+    # CRITICAL: Extract BOTH coverage_period_start and end_date from Coverage Period field
+    # Coverage Period format: "MM/DD/YYYY-MM/DD/YYYY" where:
+    #   - First date is coverage_period_start (when contract starts/was signed)
+    #   - Second date is end_date (when contract expires)
+    # In tables, the date is in a separate row from the header, so just search for the date pattern
+    coverage_period_match = re.search(r'(\d{2}/\d{2}/\d{4})-(\d{2}/\d{2}/\d{4})', text)
+    if coverage_period_match:
+        start_date_str = coverage_period_match.group(1)  # First date is coverage start
+        end_date_str = coverage_period_match.group(2)    # Second date is end date
+        try:
+            coverage_start = datetime.strptime(start_date_str, "%m/%d/%Y")
+            structured['coverage_period_start'] = coverage_start.strftime("%Y-%m-%d")
+        except:
+            structured['coverage_period_start'] = "Not specified"
+        try:
+            end_date = datetime.strptime(end_date_str, "%m/%d/%Y")
+            structured['end_date'] = end_date.strftime("%Y-%m-%d")
+        except:
+            structured['end_date'] = "Not specified"
+    else:
+        # Fallback: if no Coverage Period found, try calculating from start + term
+        if term_match and start_date_str != "Not specified":
+            try:
+                start_date = parse_date(start_date_str)
+                end_date = start_date + relativedelta(years=term_years)
+                structured['end_date'] = end_date.strftime("%Y-%m-%d")
+            except:
+                structured['end_date'] = f"{term_years} year(s) from {start_date_str}"
+        else:
+            structured['end_date'] = "Not specified"
+    
+    # Extract parties - ensure BOTH are captured
     parties = []
-    if "confluent" in text.lower():
+    
+    # Check text for explicit mentions
+    if "confluent" in text_lower:
         parties.append("Confluent")
-    if "ibm" in text.lower():
+    if "ibm" in text_lower:
         parties.append("IBM")
-    structured['parties'] = parties if parties else ["Not specified"]
+    
+    # Fallback: Extract from filename if not found in text
+    # Filename format: "Confluent_IBM-X.XX.XXXX.docx"
+    if not parties or len(parties) < 2:
+        filename_lower = filename.lower() if filename else ""
+        if "confluent" in filename_lower and "Confluent" not in parties:
+            parties.insert(0, "Confluent")  # Insert at beginning
+        if "ibm" in filename_lower and "IBM" not in parties:
+            parties.append("IBM")
+    
+    structured['parties'] = parties if parties else ["Unknown"]
     
     # Contract type
     structured['contract_type'] = "ESA" if "ESA" in text else "Sales Agreement"
@@ -200,7 +309,7 @@ def process_contracts_batch(partner_name="Confluent", text_only=False):
                 
                 # Extract structured fields if not text-only mode
                 if not text_only:
-                    structured = extract_structured_fields(text)
+                    structured = extract_structured_fields(text, os.path.basename(file_path))
                     contract_data["structured_summary"] = structured
                     pbar.set_postfix({"amount": structured.get('amount', 'N/A')})
                 else:
@@ -319,4 +428,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Made with Bob

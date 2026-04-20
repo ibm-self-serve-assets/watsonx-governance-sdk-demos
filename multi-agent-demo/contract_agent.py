@@ -9,7 +9,7 @@ from typing import TypedDict, Annotated, Optional, Dict, List, Union
 from langgraph.graph import StateGraph, START, END
 from langchain_ibm import WatsonxLLM, WatsonxEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_core.documents import Document
 import operator
 import os
@@ -110,6 +110,44 @@ class ContractAgent:
             raise ValueError("WATSONX_APIKEY must be provided or set in environment variables")
         if not self.project_id:
             raise ValueError("WATSONX_PROJECT_ID must be provided or set in environment variables")
+    def _canonicalize_products(self, products: List[str]) -> List[str]:
+        """
+        Canonicalize product names for better matching.
+        
+        Key rule: "watsonx as a service" becomes generic "watsonx" for fuzzy matching.
+        The matching agent will handle finding "watsonx" in CRM product fields.
+        
+        Args:
+            products: List of product names from contract
+            
+        Returns:
+            List of canonicalized product names
+        """
+        canonicalized = []
+        
+        for product in products:
+            product_lower = product.lower().strip()
+            
+            # Handle "watsonx as a service" - simplify to generic "watsonx"
+            if product_lower == "watsonx as a service":
+                canonicalized.append("watsonx")
+            # Handle specific watsonx products - keep as is
+            elif "watsonx" in product_lower:
+                canonicalized.append(product)
+            # Handle other products - keep as is
+            else:
+                canonicalized.append(product)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        result = []
+        for p in canonicalized:
+            if p not in seen:
+                seen.add(p)
+                result.append(p)
+        
+        return result
+    
     def _load_cache(self):
         """Load contract cache from JSON file"""
         cache_file = "contracts_cache.json"
@@ -280,18 +318,14 @@ class ContractAgent:
             
             # Not in cache - read from file
             try:
-                print(f"DEBUG: Reading document from: {file_path}")
                 raw_text = self._read_document(file_path)
-                print(f"DEBUG: Extracted {len(raw_text) if raw_text else 0} characters")
                 
                 if not raw_text or len(raw_text.strip()) == 0:
-                    print(f"DEBUG: Document appears empty!")
                     return {
                         "raw_text": None,
                         "messages": [f"Warning: Document appears empty or could not extract text from {file_path}"]
                     }
                 
-                print(f"DEBUG: Returning raw_text with {len(raw_text)} characters")
                 return {
                     "raw_text": raw_text,
                     "messages": [f"Document read successfully: {len(raw_text)} characters"]
@@ -299,8 +333,6 @@ class ContractAgent:
             except Exception as e:
                 import traceback
                 error_details = traceback.format_exc()
-                print(f"DEBUG: Error reading document: {str(e)}")
-                print(error_details)
                 return {
                     "raw_text": None,
                     "messages": [f"Error reading document: {str(e)}\n{error_details}"]
@@ -339,12 +371,21 @@ class ContractAgent:
             metadata_prompt = ChatPromptTemplate.from_template(
                 "You are a contract analysis expert. Extract key metadata from this contract:\n\n"
                 "{contract_text}\n\n"
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. Extract ALL parties mentioned - this includes BOTH IBM AND the partner company (e.g., Confluent)\n"
+                "2. List EVERY product/service mentioned, not just the first one\n"
+                "3. Look for phrases like 'Cloud Services IBM watsonx as a Service, IBM watsonx Code Assistant for Ansible Service'\n"
+                "4. Extract each product separately\n\n"
+                "EXAMPLE:\n"
+                "Text: 'Cloud Services IBM watsonx as a Service, IBM watsonx Code Assistant for Ansible Service'\n"
+                "Extract as: watsonx as a Service, watsonx Code Assistant for Ansible Service\n\n"
                 "Extract and provide in this exact format:\n"
-                "PARTIES: [List all parties involved]\n"
+                "PARTIES: [List ALL parties - both IBM and partner company]\n"
                 "EFFECTIVE_DATE: [Contract effective date]\n"
-                "TERM_LENGTH: [Duration/term of contract]\n"
+                "TERM_LENGTH: [Duration/term of contract, e.g., '1 year', '2 years']\n"
                 "KEY_OBLIGATIONS: [Main obligations and responsibilities]\n"
-                "MILESTONES: [Key milestones or deliverables]\n\n"
+                "MILESTONES: [Key milestones or deliverables]\n"
+                "PRODUCTS: [ALL products/services mentioned, separated by commas]\n\n"
                 "If information is not found, write 'Not specified'."
             )
 
@@ -433,20 +474,41 @@ class ContractAgent:
                 "Based on this extracted contract metadata and the full contract text:\n\n"
                 "{metadata}\n\n"
                 "FULL CONTRACT TEXT (first 5000 chars):\n{contract_text}\n\n"
+                "CRITICAL INSTRUCTIONS FOR DATE EXTRACTION:\n"
+                "1. Look for 'Coverage Period' field in the contract (e.g., '05/31/2023-05/31/2026')\n"
+                "2. Extract BOTH dates from Coverage Period:\n"
+                "   - coverage_period_start: FIRST date (e.g., '05/31/2023' becomes '2023-05-31')\n"
+                "   - end_date: SECOND date (e.g., '05/31/2026' becomes '2026-05-31')\n"
+                "3. DO NOT calculate dates from start_date + term_length\n"
+                "4. If Coverage Period is not found, look for explicit dates\n\n"
+                "DATE EXTRACTION EXAMPLES:\n"
+                "- Coverage Period: '01/31/2024-01/31/2025' -> coverage_period_start='2024-01-31', end_date='2025-01-31'\n"
+                "- Coverage Period: '07/31/2024-07/31/2026' -> coverage_period_start='2024-07-31', end_date='2026-07-31'\n"
+                "- Coverage Period: '05/31/2023-05/31/2026' -> coverage_period_start='2023-05-31', end_date='2026-05-31'\n\n"
+                "OTHER CRITICAL INSTRUCTIONS:\n"
+                "1. Extract BOTH parties (IBM AND the partner company like Confluent)\n"
+                "2. Extract ALL products as an array - if you see 'watsonx as a Service, watsonx Code Assistant', extract BOTH\n"
+                "3. The partner company name is often in the filename (e.g., 'Confluent_IBM-1.30.2024.docx' means Confluent is a party)\n\n"
+                "PRODUCT EXTRACTION EXAMPLES:\n"
+                "- Text: 'Cloud Services IBM watsonx as a Service, IBM watsonx Code Assistant for Ansible Service'\n"
+                "- Extract: ['watsonx as a Service', 'watsonx Code Assistant']\n"
+                "- Text: 'Cognos'\n"
+                "- Extract: ['Cognos']\n\n"
                 "Create a structured JSON summary with these fields:\n"
-                "- parties: array of party names\n"
-                "- effective_date: normalized date (YYYY-MM-DD format if possible)\n"
-                "- end_date: contract end/expiration date (YYYY-MM-DD format if possible)\n"
-                "- start_date: contract start date (YYYY-MM-DD format if possible)\n"
-                "- term_length: normalized duration (e.g., '1 year', '2 years')\n"
+                "- parties: array of party names (MUST include both IBM and partner)\n"
+                "- effective_date: normalized date (YYYY-MM-DD format)\n"
+                "- start_date: contract start date (YYYY-MM-DD format, same as effective_date)\n"
+                "- coverage_period_start: START DATE from Coverage Period (YYYY-MM-DD format, e.g., '2024-07-31')\n"
+                "- end_date: END DATE from Coverage Period (YYYY-MM-DD format, NOT calculated)\n"
+                "- term_length: normalized duration (e.g., '1 year', '2 years', '3 years')\n"
                 "- amount: total contract value with currency (e.g., '$500,092.80')\n"
-                "- products: array of specific products/services mentioned (e.g., ['watsonx as a Service', 'watsonx Orchestrate', 'watsonx.governance'])\n"
+                "- products: array of ALL products/services mentioned (extract each one separately)\n"
                 "- key_obligations: array of main obligations\n"
                 "- milestones: array of key milestones\n"
-                "- contract_type: inferred type (e.g., 'Sales Agreement', 'Service Contract', 'ESA')\n"
+                "- contract_type: inferred type (e.g., 'ESA', 'Sales Agreement', 'Service Contract')\n"
                 "- risk_level: assessed risk level (Low/Medium/High)\n\n"
-                "IMPORTANT: Extract the EXACT dollar amount, product names, and dates from the contract text.\n"
-                "Look for phrases like 'committed order value', 'Purchase Commitment', 'Cloud Services', 'watsonx', 'Effective Date', 'term of this TD'.\n\n"
+                "IMPORTANT: Extract BOTH coverage_period_start and end_date from Coverage Period, EXACT dollar amount, and ALL product names.\n"
+                "Look for phrases like 'Coverage Period', 'committed order value', 'Purchase Commitment', 'Cloud Services', 'watsonx', 'Cognos', 'Effective Date'.\n\n"
                 "Provide ONLY valid JSON, no additional text."
             )
             
@@ -480,6 +542,127 @@ class ContractAgent:
                 
                 try:
                     structured_summary = json.loads(structured_data)
+                    
+                    # POST-PROCESSING: Canonicalize products for better matching
+                    # WHY: "watsonx as a service" should match ANY watsonx product
+                    if "products" in structured_summary:
+                        original_products = structured_summary["products"]
+                        canonicalized_products = self._canonicalize_products(original_products)
+                        structured_summary["original_products"] = original_products
+                        structured_summary["products"] = canonicalized_products
+                        if original_products != canonicalized_products:
+                            print(f"[OK] Canonicalized products: {original_products} -> {canonicalized_products}")
+                    
+                    # POST-PROCESSING: Extract numeric amount for comparison
+                    # WHY: CRM has rounded amounts, contracts have exact amounts (+/-7% tolerance)
+                    if "amount" in structured_summary:
+                        amount_str = str(structured_summary["amount"])
+                        import re
+                        # Extract numeric value from strings like "$500,092.80" or "$500K"
+                        amount_match = re.search(r'[\$]?\s*([\d,]+\.?\d*)\s*([KMB])?', amount_str)
+                        if amount_match:
+                            numeric_str = amount_match.group(1).replace(',', '')
+                            multiplier_str = amount_match.group(2)
+                            
+                            try:
+                                amount_numeric = float(numeric_str)
+                                # Handle K, M, B multipliers
+                                if multiplier_str:
+                                    multipliers = {'K': 1000, 'M': 1000000, 'B': 1000000000}
+                                    amount_numeric *= multipliers.get(multiplier_str, 1)
+                                
+                                structured_summary["amount_numeric"] = amount_numeric
+                                print(f"✓ Extracted numeric amount: ${amount_numeric:,.2f}")
+                            except ValueError:
+                                pass
+                    
+                    # POST-PROCESSING: Calculate actual end_date if vague
+                    # WHY: Contracts show "1 year from effective date" instead of "2025-01-31"
+                    # This prevents urgency calculations like "expired 68 days ago"
+                    if structured_summary.get("end_date") and ("from effective date" in str(structured_summary["end_date"]).lower() or "from the effective date" in str(structured_summary["end_date"]).lower()):
+                        from dateutil.relativedelta import relativedelta
+                        from dateutil import parser as date_parser
+                        
+                        start_date_str = structured_summary.get("start_date") or structured_summary.get("effective_date")
+                        term_str = structured_summary.get("term_length", "")
+                        
+                        if start_date_str and term_str:
+                            try:
+                                # Parse start date
+                                start_date = date_parser.parse(start_date_str)
+                                
+                                # Extract years from term
+                                import re
+                                years_match = re.search(r'(\d+)\s*years?', term_str, re.IGNORECASE)
+                                if years_match:
+                                    years = int(years_match.group(1))
+                                    end_date = start_date + relativedelta(years=years)
+                                    structured_summary["end_date"] = end_date.strftime("%Y-%m-%d")
+                                    print(f"✓ Calculated end_date: {structured_summary['end_date']} (start: {start_date_str}, term: {term_str})")
+                            except Exception as calc_error:
+                                print(f"Warning: Could not calculate end_date: {calc_error}")
+                    
+                    # POST-PROCESSING: Extract partner name from filename if missing from parties
+                    # WHY: LLM sometimes only extracts "IBM" and misses "Confluent"
+                    parties = structured_summary.get("parties", [])
+                    if len(parties) <= 1 or (len(parties) == 1 and "IBM" in parties):
+                        filename = Path(state["file_path"]).name
+                        # Extract partner name from filename pattern like "Confluent_IBM-1.30.2024.docx"
+                        import re
+                        partner_match = re.match(r'([^_]+)_IBM', filename)
+                        if partner_match:
+                            partner_name = partner_match.group(1)
+                            if partner_name not in parties:
+                                parties.append(partner_name)
+                                structured_summary["parties"] = parties
+                                print(f"✓ Added partner from filename: {partner_name}")
+                    
+                    # POST-PROCESSING: Extract ALL products from contract text if only one found
+                    # WHY: LLM sometimes only extracts first product, missing "watsonx Code Assistant"
+                    products = structured_summary.get("products", [])
+                    if len(products) <= 1:
+                        raw_text = state.get("raw_text", "").lower()
+                        additional_products = []
+                        
+                        # Look for watsonx variants
+                        if "watsonx as a service" in raw_text and "watsonx as a Service" not in products:
+                            additional_products.append("watsonx as a Service")
+                        if "watsonx code assistant" in raw_text and not any("code assistant" in p.lower() for p in products):
+                            additional_products.append("watsonx Code Assistant for Ansible Service")
+                        if "watsonx orchestrate" in raw_text and not any("orchestrate" in p.lower() for p in products):
+                            additional_products.append("watsonx Orchestrate")
+                        if "watsonx.governance" in raw_text or "watsonx governance" in raw_text:
+                            if not any("governance" in p.lower() for p in products):
+                                additional_products.append("watsonx.governance")
+                        
+                        # Look for Cognos
+                        if "cognos" in raw_text and not any("cognos" in p.lower() for p in products):
+                            additional_products.append("Cognos Analytics")
+                        
+                        if additional_products:
+                            # Combine with existing, removing duplicates
+                            all_products = list(set(products + additional_products))
+                            structured_summary["products"] = all_products
+                            print(f"✓ Enhanced products list: {all_products}")
+                    
+                    # POST-PROCESSING: Extract coverage_period_start from Coverage Period if missing
+                    # WHY: LLM sometimes only extracts end_date, but we need the start date for matching
+                    if "coverage_period_start" not in structured_summary or not structured_summary.get("coverage_period_start"):
+                        raw_text = state.get("raw_text", "")
+                        import re
+                        from dateutil import parser as date_parser
+                        
+                        # Look for "Coverage Period" pattern like "07/31/2024-07/31/2026"
+                        coverage_match = re.search(r'Coverage Period[:\s]+(\d{1,2}/\d{1,2}/\d{4})-(\d{1,2}/\d{1,2}/\d{4})', raw_text, re.IGNORECASE)
+                        if coverage_match:
+                            try:
+                                start_date_str = coverage_match.group(1)
+                                parsed_start = date_parser.parse(start_date_str)
+                                structured_summary["coverage_period_start"] = parsed_start.strftime("%Y-%m-%d")
+                                print(f"✓ Extracted coverage_period_start from text: {structured_summary['coverage_period_start']}")
+                            except Exception as e:
+                                print(f"Warning: Could not parse coverage_period_start: {e}")
+                    
                 except json.JSONDecodeError as e:
                     import re
                     json_match = re.search(r'\{[\s\S]*\}', structured_data)
@@ -885,7 +1068,7 @@ class ContractAgent:
                         })
                     else:
                         long_dated_contracts.append(contract_record)
-                elif -90 <= days_to_end < 0:
+                else:  # days_to_end < 0 - contract has expired
                     recently_expired.append({**contract_record, "days_since_expiry": abs(days_to_end)})
 
             if "cognos" in normalized_text:
@@ -901,12 +1084,43 @@ class ContractAgent:
             if contract_record["enabled_vs_pending"] == "pending":
                 risk_flags.append(f"Pending enablement or approval may delay sales activity: {filename}")
 
+        # Generate dynamic next steps based on actual contract analysis
+        # WHY: Hard-coded generic steps were appearing in every output regardless of context
         if not next_steps:
-            next_steps = [
-                "Review the active IBM-Confluent contract portfolio and confirm which agreements are currently enabled for sales activity.",
-                "Prioritize contracts with renewal dates or notice windows in the next 30-90 days.",
-                "Update the CRM Next Steps column with the highest-priority seller actions for Confluent."
-            ]
+            # Build contract-specific recommendations
+            if recently_expired:
+                for contract in recently_expired[:2]:  # Top 2 most urgent
+                    days_expired = contract.get("days_since_expiry", 0)
+                    next_steps.append(
+                        f"URGENT: {contract['file_name']} expired {days_expired} days ago - "
+                        f"verify renewal status and create CRM opportunity if missing"
+                    )
+            
+            if renewal_candidates:
+                for contract in sorted(renewal_candidates, key=lambda x: x.get("days_to_renewal", 999))[:2]:
+                    days_left = contract.get("days_to_renewal", 0)
+                    urgency = "CRITICAL" if days_left <= 30 else "HIGH PRIORITY"
+                    next_steps.append(
+                        f"{urgency}: {contract['file_name']} expires in {days_left} days - "
+                        f"initiate renewal discussion immediately"
+                    )
+            
+            if pending_permissions:
+                next_steps.append(
+                    f"{len(pending_permissions)} contract(s) pending enablement - "
+                    f"complete approval process to activate for sales"
+                )
+            
+            # Only add generic steps if no specific actions identified
+            if not next_steps:
+                if active_contracts:
+                    next_steps.append(
+                        f"{len(active_contracts)} active contract(s) - monitor for upcoming renewals"
+                    )
+                else:
+                    next_steps.append(
+                        "Review contract portfolio and confirm current status with legal/procurement"
+                    )
 
         risk_level = "Low"
         if len(recently_expired) > 0 or len(renewal_candidates) >= 2 or len(pending_permissions) > 0:
