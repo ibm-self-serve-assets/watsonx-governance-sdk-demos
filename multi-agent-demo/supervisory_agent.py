@@ -4,7 +4,7 @@ Supervisory Agent - Orchestrates Contract, Research, and Action agents
 This agent:
 1. Interprets seller intent from natural language query
 2. Identifies required agents based on the workflow
-3. Executes agents in sequence: Contract → Research → Action
+3. Executes agents in sequence: Contract -> Research -> Action
 4. Aggregates context and passes between agents
 5. Returns final result with next best action to seller
 """
@@ -589,12 +589,12 @@ class SupervisoryAgent:
                             product = match.get("contract_product", "Unknown")
                             opps = match.get("opportunities", [])
                             
-                            output_parts.append(f"\n  • {contract_file} ({product})")
+                            output_parts.append(f"\n  - {contract_file} ({product})")
                             for opp in opps:
                                 opp_num = opp.get('opportunity_number', '?')
                                 output_parts.extend([
-                                    f"    → CRM #{opp_num}: {opp.get('opportunity_name', 'Unknown')}",
-                                    f"      Owner: {opp.get('owner', 'Unknown')}",
+                                    f"    -> CRM #{opp_num}: {opp.get('opportunity_name', 'Unknown')}",
+                                    f"       Owner: {opp.get('owner', 'Unknown')}",
                                     f"      Next Steps: {opp.get('next_steps', 'None')}"
                                 ])
                         output_parts.append("")
@@ -604,7 +604,7 @@ class SupervisoryAgent:
                         for unmatch in unmatched:
                             contract_file = unmatch.get("contract", {}).get("file_name", "Unknown")
                             product = unmatch.get("contract_product", "Unknown")
-                            output_parts.append(f"  • {contract_file} ({product})")
+                            output_parts.append(f"  - {contract_file} ({product})")
                         output_parts.append("")
                 
                 # Recommended Next Steps

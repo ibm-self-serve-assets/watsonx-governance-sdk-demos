@@ -5,7 +5,13 @@ langchain-ibm>=0.3.0
 langchain-community>=0.3.0
 langchain-openai>=0.2.0
 langchain-tavily>=0.1.0
+langchain-chroma>=0.1.0
 typing-extensions>=4.0.0
+
+# watsonx.governance SDK and dependencies
+ibm-watsonx-gov>=1.0.0
+textstat>=0.7.0
+jsonpath-ng>=1.6.0
 
 # Vector store
 chromadb>=0.5.0

@@ -482,9 +482,9 @@ class ContractAgent:
                 "3. DO NOT calculate dates from start_date + term_length\n"
                 "4. If Coverage Period is not found, look for explicit dates\n\n"
                 "DATE EXTRACTION EXAMPLES:\n"
-                "- Coverage Period: '01/31/2024-01/31/2025' → coverage_period_start='2024-01-31', end_date='2025-01-31'\n"
-                "- Coverage Period: '07/31/2024-07/31/2026' → coverage_period_start='2024-07-31', end_date='2026-07-31'\n"
-                "- Coverage Period: '05/31/2023-05/31/2026' → coverage_period_start='2023-05-31', end_date='2026-05-31'\n\n"
+                "- Coverage Period: '01/31/2024-01/31/2025' -> coverage_period_start='2024-01-31', end_date='2025-01-31'\n"
+                "- Coverage Period: '07/31/2024-07/31/2026' -> coverage_period_start='2024-07-31', end_date='2026-07-31'\n"
+                "- Coverage Period: '05/31/2023-05/31/2026' -> coverage_period_start='2023-05-31', end_date='2026-05-31'\n\n"
                 "OTHER CRITICAL INSTRUCTIONS:\n"
                 "1. Extract BOTH parties (IBM AND the partner company like Confluent)\n"
                 "2. Extract ALL products as an array - if you see 'watsonx as a Service, watsonx Code Assistant', extract BOTH\n"
@@ -551,10 +551,10 @@ class ContractAgent:
                         structured_summary["original_products"] = original_products
                         structured_summary["products"] = canonicalized_products
                         if original_products != canonicalized_products:
-                            print(f"✓ Canonicalized products: {original_products} → {canonicalized_products}")
+                            print(f"[OK] Canonicalized products: {original_products} -> {canonicalized_products}")
                     
                     # POST-PROCESSING: Extract numeric amount for comparison
-                    # WHY: CRM has rounded amounts, contracts have exact amounts (±7% tolerance)
+                    # WHY: CRM has rounded amounts, contracts have exact amounts (+/-7% tolerance)
                     if "amount" in structured_summary:
                         amount_str = str(structured_summary["amount"])
                         import re
@@ -1092,7 +1092,7 @@ class ContractAgent:
                 for contract in recently_expired[:2]:  # Top 2 most urgent
                     days_expired = contract.get("days_since_expiry", 0)
                     next_steps.append(
-                        f"🚨 URGENT: {contract['file_name']} expired {days_expired} days ago - "
+                        f"URGENT: {contract['file_name']} expired {days_expired} days ago - "
                         f"verify renewal status and create CRM opportunity if missing"
                     )
             
@@ -1101,13 +1101,13 @@ class ContractAgent:
                     days_left = contract.get("days_to_renewal", 0)
                     urgency = "CRITICAL" if days_left <= 30 else "HIGH PRIORITY"
                     next_steps.append(
-                        f"⚠️ {urgency}: {contract['file_name']} expires in {days_left} days - "
+                        f"{urgency}: {contract['file_name']} expires in {days_left} days - "
                         f"initiate renewal discussion immediately"
                     )
             
             if pending_permissions:
                 next_steps.append(
-                    f"📋 {len(pending_permissions)} contract(s) pending enablement - "
+                    f"{len(pending_permissions)} contract(s) pending enablement - "
                     f"complete approval process to activate for sales"
                 )
             
@@ -1115,7 +1115,7 @@ class ContractAgent:
             if not next_steps:
                 if active_contracts:
                     next_steps.append(
-                        f"✅ {len(active_contracts)} active contract(s) - monitor for upcoming renewals"
+                        f"{len(active_contracts)} active contract(s) - monitor for upcoming renewals"
                     )
                 else:
                     next_steps.append(

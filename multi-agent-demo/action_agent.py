@@ -528,7 +528,7 @@ class ActionAgent:
                             # This is a title (e.g., "Chief Financial"), not a name - skip it
                             continue
                         if is_confluent and found_name.lower() in IBM_EXEC_NAMES:
-                            # Skip IBM executive — fall through to hard-coded data
+                            # Skip IBM executive - fall through to hard-coded data
                             continue
                         return {"name": found_name, "title": role, "role": role}
 
@@ -608,8 +608,8 @@ class ActionAgent:
                 reasons = []
                 
                 if not crm_match:
-                    reasons.append("❌ No CRM opportunity created - likely no one reached out")
-                    reasons.append("⚠️ Lack of proactive engagement from sales team")
+                    reasons.append("No CRM opportunity created - likely no one reached out")
+                    reasons.append("Lack of proactive engagement from sales team")
                     return {
                         "primary_reason": "No proactive outreach - no CRM tracking",
                         "details": reasons,
@@ -621,8 +621,8 @@ class ActionAgent:
                 next_steps = str(crm_match.get("next_steps", "")).lower()
                 
                 if stage == "Lost":
-                    reasons.append(f"❌ Deal marked as Lost in CRM")
-                    reasons.append(f"📝 Reason: {crm_match.get('next_steps', 'No reason provided')}")
+                    reasons.append(f"Deal marked as Lost in CRM")
+                    reasons.append(f"Reason: {crm_match.get('next_steps', 'No reason provided')}")
                     return {
                         "primary_reason": "Deal was lost",
                         "details": reasons,
@@ -630,7 +630,7 @@ class ActionAgent:
                     }
                 
                 if stage == "Won":
-                    reasons.append("✅ Deal was won but contract may have expired naturally")
+                    reasons.append("Deal was won but contract may have expired naturally")
                     return {
                         "primary_reason": "Natural expiration after successful engagement",
                         "details": reasons,
@@ -639,15 +639,15 @@ class ActionAgent:
                 
                 # Active engagement but still expired
                 if "sizing" in next_steps or "working" in next_steps:
-                    reasons.append("🔄 Active engagement but contract expired during negotiations")
-                    reasons.append("⏰ Timing issue - discussions ongoing but contract lapsed")
+                    reasons.append("Active engagement but contract expired during negotiations")
+                    reasons.append("Timing issue - discussions ongoing but contract lapsed")
                     return {
                         "primary_reason": "Timing gap - active discussions but contract expired",
                         "details": reasons,
                         "action": "Accelerate renewal process - customer is engaged"
                     }
                 
-                reasons.append("⚠️ Unknown reason - requires investigation")
+                reasons.append("Unknown reason - requires investigation")
                 return {
                     "primary_reason": "Requires investigation",
                     "details": reasons,
@@ -662,10 +662,10 @@ class ActionAgent:
                 Priority order:
                   1. Explicit role mention in seller query (cpo / cto / cfo / ceo)
                   2. Role mentioned in CRM next steps
-                  3. Product-based heuristic (AI/tech products → CTO)
-                  4. Renewal / procurement focus → CPO
-                  5. Critical urgency → CEO
-                  6. Default → CPO
+                  3. Product-based heuristic (AI/tech products -> CTO)
+                  4. Renewal / procurement focus -> CPO
+                  5. Critical urgency -> CEO
+                  6. Default -> CPO
                 """
                 products = self._extract_products(contract)
                 query_lower = query.lower()
@@ -739,9 +739,9 @@ class ActionAgent:
                         filtered_contracts.append(most_recent)
                         
                         # Log the renewal chain detection
-                        print(f"\n🔄 Renewal chain detected for {', '.join(product_key)}:")
+                        print(f"\n[RENEWAL CHAIN] Detected for {', '.join(product_key)}:")
                         for i, c in enumerate(sorted_contracts):
-                            marker = "→ MOST RECENT" if i == 0 else "  (older, filtered out)"
+                            marker = "-> MOST RECENT" if i == 0 else "  (older, filtered out)"
                             print(f"   {c.get('file_name', 'Unknown')} - End: {c.get('end_date', 'Unknown')} {marker}")
                 
                 return filtered_contracts
@@ -750,7 +750,7 @@ class ActionAgent:
             all_expired = recently_expired.copy()
             filtered_expired = detect_renewal_chains(all_expired)
             
-            print(f"\n📊 Contract filtering: {len(recently_expired)} expired → {len(filtered_expired)} after removing old renewals")
+            print(f"\nContract filtering: {len(recently_expired)} expired -> {len(filtered_expired)} after removing old renewals")
             
             # Process filtered expired contracts first (highest priority)
             for contract in filtered_expired:
@@ -779,11 +779,10 @@ class ActionAgent:
                 
                 if crm_match:
                     stage = crm_match.get('stage', 'Unknown')
-                    stage_emoji = "✅" if stage == "Won" else "❌" if stage == "Lost" else "🔄"
                     stage_status = "CONTRACT SIGNED" if stage == "Won" else "FAILED" if stage == "Lost" else "ACTIVE ENGAGEMENT"
                     
                     reasoning_parts.extend([
-                        f"- {stage_emoji} CRM Status: {stage_status}",
+                        f"- CRM Status: {stage_status}",
                         f"- Opportunity: \"{crm_match.get('opportunity_name', 'Unknown')}\"",
                         f"- Owner: {crm_match.get('owner', 'Unknown')}",
                         f"- Stage: {stage}",
@@ -792,9 +791,9 @@ class ActionAgent:
                         f"- Next Steps: \"{crm_match.get('next_steps', 'None')}\"",
                     ])
                 else:
-                    reasoning_parts.append("- ⚠️ WARNING: No matching CRM opportunity found!")
-                    reasoning_parts.append("- 🚨 ACTION REQUIRED: Create CRM opportunity to track renewal")
-                    reasoning_parts.append("- 📝 This means NO ONE is actively working on this renewal")
+                    reasoning_parts.append("- WARNING: No matching CRM opportunity found!")
+                    reasoning_parts.append("- ACTION REQUIRED: Create CRM opportunity to track renewal")
+                    reasoning_parts.append("- This means NO ONE is actively working on this renewal")
                 
                 reasoning_parts.append("")
                 reasoning_parts.append("WHY DID THIS CONTRACT EXPIRE?")
@@ -804,12 +803,29 @@ class ActionAgent:
                 
                 reasoning_parts.append("")
                 reasoning_parts.append("EXPANSION OPPORTUNITY ANALYSIS:")
-                reasoning_parts.append(f"- Can Expand: {'YES ✅' if expansion['can_expand'] else 'NO'}")
+                reasoning_parts.append(f"- Can Expand: {'YES' if expansion['can_expand'] else 'NO'}")
                 if expansion['signals']:
                     reasoning_parts.append("- Signals:")
                     for signal in expansion['signals']:
-                        reasoning_parts.append(f"  • {signal}")
+                        reasoning_parts.append(f"  - {signal}")
                 reasoning_parts.append(f"- Recommendation: {expansion['recommendation']}")
+                
+                # Build concise email style context for friendlier follow-up drafts
+                email_style_context = []
+                if crm_match:
+                    next_steps_text = crm_match.get('next_steps', 'None')
+                    owner = crm_match.get('owner', 'the account owner')
+                    email_style_context.append(f"CRM owner: {owner}")
+                    email_style_context.append(f"CRM next steps: {next_steps_text}")
+                    if "sizing" in str(next_steps_text).lower():
+                        email_style_context.append("Ask if sizing has been finalized")
+                
+                if urgency and urgency.get('days_expired', 0) > 0:
+                    email_style_context.append("Mention the contract has already expired")
+                    email_style_context.append("State urgency in a direct, conversational way")
+                
+                if expansion.get('can_expand'):
+                    email_style_context.append("Optionally mention expansion after renewal is addressed")
                 
                 reasoning_parts.append("")
                 reasoning_parts.append("URGENCY ANALYSIS:")
@@ -833,7 +849,7 @@ class ActionAgent:
                 elif urgency:
                     reasoning_parts.append(f"- Contract expired {urgency['days_expired']} days ago with no CRM tracking")
                     reasoning_parts.append(f"- ${value} at risk with no visibility into renewal status")
-                    reasoning_parts.append(f"- 🚨 CRITICAL: {expiration_analysis['action']}")
+                    reasoning_parts.append(f"- CRITICAL: {expiration_analysis['action']}")
                 
                 reasoning_parts.append("")
                 reasoning_parts.append("KEY PEOPLE TO CONTACT:")
@@ -886,7 +902,7 @@ class ActionAgent:
                         ])
                 else:
                     reasoning_parts.extend([
-                        "1. 🚨 Create CRM opportunity immediately to track this expired contract",
+                        "1. Create CRM opportunity immediately to track this expired contract",
                         "2. Research customer contact and current relationship status",
                         f"3. Reach out to previous signers: {', '.join(signers)}",
                         f"4. Draft outreach email to {recipient_display} to re-engage",
@@ -986,7 +1002,10 @@ class ActionAgent:
                     "specific_action": reasoning_parts[reasoning_parts.index("RECOMMENDED ACTIONS:") + 1] if "RECOMMENDED ACTIONS:" in reasoning_parts else "Start renewal process",
                     "recipient_info": recipient_info,
                     "crm_owner": crm_match.get('owner') if crm_match else None,
-                    "urgency_level": urgency["urgency_level"] if urgency else "MEDIUM"
+                    "urgency_level": urgency["urgency_level"] if urgency else "MEDIUM",
+                    "products": ", ".join(products),
+                    "value": value,
+                    "renewal_details": crm_match.get('next_steps', 'No renewal details available') if crm_match else "No CRM renewal details available"
                 })
             
             # Sort by priority
@@ -1026,7 +1045,9 @@ class ActionAgent:
                         action_lines.extend([
                             "",
                             f"PRIORITY {i}: {action['contract']}",
-                            f"Urgency: {action['urgency_level']}",
+                            f"Products: {action.get('products', 'Unknown')}",
+                            f"Value: {action.get('value', 'Unknown')}",
+                            f"Renewal Details: {action.get('renewal_details', 'No renewal details available')}",
                             f"Action: {action['specific_action']}",
                             f"Recipient: {action['recipient_info']['name'] if action['recipient_info']['name'] else action['recipient_info']['role']} ({action['recipient_info']['role']})",
                         ])
@@ -1245,9 +1266,10 @@ class ActionAgent:
                 "You are a senior IBM seller writing ONE professional outreach email.\n\n"
                 "════════════════════════════════════════════\n"
                 "RECIPIENT\n"
-                "  Name : {recipient_name}\n"
-                "  Role : {recipient_role}\n"
-                "  Company: {partner_name}\n\n"
+                "  Name: {recipient_name}\n"
+                "  Role: {recipient_role}\n"
+                "  Company: {partner_name}\n"
+                "  IMPORTANT: Use the NAME in the greeting, not the role. The greeting should be 'Hi {greeting},' where greeting is the first name only.\n\n"
                 "CONTRACT FACTS\n"
                 "  Product(s)   : {products}\n"
                 "  Contract Value: {value}\n"
@@ -1258,21 +1280,29 @@ class ActionAgent:
                 "OVERALL RISK: {risk_level}\n"
                 "TOP PRIORITY ACTION: {top_step}\n"
                 "════════════════════════════════════════════\n\n"
-                "WRITING RULES — follow every one:\n"
+                "CONTEXT AWARENESS:\n"
+                "- The recipient ({recipient_name}, {recipient_role}) may be mentioned in CRM notes by their role title\n"
+                "- If CRM notes mention '{recipient_role}' doing something (e.g., 'CFO signed'), that refers to THIS recipient\n"
+                "- Acknowledge their previous involvement naturally (e.g., 'following up on the agreement you signed')\n"
+                "- Do NOT quote CRM notes verbatim - paraphrase professionally\n\n"
+                "WRITING RULES - follow every one:\n"
                 "1. Output EXACTLY ONE email. No alternatives, no commentary, no markdown fences.\n"
-                "2. Open with 'Subject:' on the first line, blank line, then 'Dear {greeting},' (use ONLY the first name provided, never full name or title).\n"
-                "3. Write 2–3 short paragraphs (total 150–200 words):\n"
-                "   • Para 1 – What you are reaching out about (contract, product, timing).\n"
-                "   • Para 2 – Address the CRM next steps directly and concretely.\n"
-                "   • Para 3 – Specific call-to-action with a proposed timeline or meeting ask.\n"
-                "4. Reference the exact products, contract value, and expiry date.\n"
-                "5. If a CRM account owner is named, mention coordinating with them.\n"
-                "6. Tone: confident, concise, executive-appropriate — no fluff.\n"
-                "7. Close with:\n"
-                "   Best regards,\n"
-                "   [Your Name]\n"
-                "   IBM Seller\n\n"
-                "STOP immediately after 'IBM Seller'. Output nothing else."
+                "2. Open with 'Subject:' on the first line, blank line, then 'Hi {greeting},'.\n"
+                "3. Match this style closely: short, direct, conversational, and human - like a real seller follow-up, not a formal executive letter.\n"
+                "4. Keep it to 2 short paragraphs, roughly 90-140 words total.\n"
+                "5. In paragraph 1, say it was great connecting and ask whether sizing for the SPECIFIC renewal has been finalized. MUST mention the specific product(s) from CONTRACT FACTS above (e.g., 'watsonx renewal' or 'Cognos renewal') so it's clear which renewal you're discussing.\n"
+                "6. In paragraph 2, mention the contract has expired and that you want to help get it in quickly. If appropriate, mention helping avoid a 5% penalty or exception-related delay in a natural, non-legalistic way.\n"
+                "7. Ask if it would be helpful to schedule a call and invite questions.\n"
+                "8. Mention the CRM account owner only if it feels natural; do not make the email sound internal or operational.\n"
+                "9. Use the first name only in the greeting. Do not use full name or title in the greeting.\n"
+                "10. Do not sound stiff, overly polished, or generic. Avoid phrases like 'I hope this message finds you well' and avoid heavy executive tone.\n"
+                "11. CRITICAL: Do NOT repeat words in the same sentence or adjacent sentences (e.g., avoid 'forward...forward', 'renewal...renewal').\n"
+                "12. CRITICAL: Do NOT quote CRM notes verbatim. Paraphrase professionally and naturally. CRM notes are internal context only - translate them into executive-appropriate language.\n"
+                "13. Write naturally as if speaking to an executive peer. Avoid awkward phrasing or grammatically incorrect constructions.\n"
+                "14. Close with exactly:\n"
+                "    Regards,\n"
+                "    [Your Name]\n\n"
+                "STOP immediately after the signature. Output nothing else."
             )
 
             llm = WatsonxLLM(
@@ -1288,7 +1318,7 @@ class ActionAgent:
             )
 
             formatted_prompt = email_prompt.invoke({
-                "recipient_name": recipient_name_str if recipient_name_str else f"the {recipient_role_str}",
+                "recipient_name": recipient_name_str if recipient_name_str else f"[Name not available - use role: {recipient_role_str}]",
                 "recipient_role": recipient_role_str,
                 "greeting": greeting,
                 "partner_name": partner_name,

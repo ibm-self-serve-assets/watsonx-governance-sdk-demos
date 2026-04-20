@@ -170,29 +170,29 @@ IMPORTANT BUSINESS RULES FOR MATCHING:
 
 1. AMOUNT MATCHING:
    - CRM amounts are ROUNDED (e.g., $250,000) while contracts have EXACT amounts (e.g., $250,003.20)
-   - Use ±7% tolerance when comparing amounts
-   - Example: $250,000 (CRM) matches $250,003.20 (contract) ✓
+   - Use +/-7% tolerance when comparing amounts
+   - Example: $250,000 (CRM) matches $250,003.20 (contract) [MATCH]
 
 2. PRODUCT MATCHING:
    - "watsonx" or "watsonx as a service" in contracts should match ANY watsonx product in CRM
-   - Examples: "watsonx" matches "watsonx.ai", "watsonx.data", "watsonx.governance", "watsonx Orchestrate" ✓
-   - "Cognos" matches "Cognos Analytics", "Cognos BI" ✓
+   - Examples: "watsonx" matches "watsonx.ai", "watsonx.data", "watsonx.governance", "watsonx Orchestrate" [MATCH]
+   - "Cognos" matches "Cognos Analytics", "Cognos BI" [MATCH]
 
 3. DATE MATCHING FOR RENEWALS:
-   - ±2 days between contract end date and opportunity close date is a STRONG indicator of renewal
-   - However, renewals can happen OUTSIDE the ±2 day window (e.g., months before expiration)
+   - +/-2 days between contract end date and opportunity close date is a STRONG indicator of renewal
+   - However, renewals can happen OUTSIDE the +/-2 day window (e.g., months before expiration)
    - Look at the full context: products, amounts, and "Next Steps" mentioning renewal
 
 4. MATCHING LOGIC:
    - For EXPIRED contracts: Look for ACTIVE opportunities (Stage=Qualify/Design/Engage/Negotiate) with:
      * Same/similar products (use rules above)
-     * Similar amounts (±7% tolerance)
+     * Similar amounts (+/-7% tolerance)
      * Next Steps mentioning "renewal", "expired", or "renew"
    
    - For ACTIVE contracts: Look for opportunities with:
-     * Contract Expiration Date matching the contract's End Date (±2 days is strong, but not required)
+     * Contract Expiration Date matching the contract's End Date (+/-2 days is strong, but not required)
      * Same products (use product matching rules)
-     * Similar amounts (±7% tolerance)
+     * Similar amounts (+/-7% tolerance)
 
 5. MULTIPLE MATCHES:
    - A contract can match MULTIPLE opportunities (e.g., renewal + expansion)
@@ -377,13 +377,13 @@ Now analyze and respond:"""
                 })
             else:
                 # CRITICAL: No CRM match found - ACTION REQUIRED NOW
-                urgency_message = "⚠️ CRITICAL: No CRM opportunity found - ACTION REQUIRED NOW!"
+                urgency_message = "CRITICAL: No CRM opportunity found - ACTION REQUIRED NOW!"
                 if renewal_urgency == "EXPIRED" and days_until_renewal is not None:
-                    urgency_message = f"🚨 URGENT: Contract EXPIRED {abs(days_until_renewal)} days ago with NO CRM tracking!"
+                    urgency_message = f"URGENT: Contract EXPIRED {abs(days_until_renewal)} days ago with NO CRM tracking!"
                 elif renewal_urgency == "CRITICAL" and days_until_renewal is not None:
-                    urgency_message = f"🚨 URGENT: Contract expires in {days_until_renewal} days with NO CRM tracking!"
+                    urgency_message = f"URGENT: Contract expires in {days_until_renewal} days with NO CRM tracking!"
                 elif renewal_urgency == "HIGH" and days_until_renewal is not None:
-                    urgency_message = f"⚠️ HIGH PRIORITY: Contract expires in {days_until_renewal} days with NO CRM tracking!"
+                    urgency_message = f"HIGH PRIORITY: Contract expires in {days_until_renewal} days with NO CRM tracking!"
                 
                 unmatched.append({
                     "contract": contract,
@@ -469,19 +469,19 @@ Now analyze and respond:"""
                 "MATCHING AGENT - CONTRACT-CRM CORRELATION & RENEWAL ANALYSIS",
                 "=" * 80,
                 "",
-                f"📊 SUMMARY:",
+                "SUMMARY:",
                 f"  Total Matched: {len(matched)} (with CRM tracking)",
-                f"  Total Unmatched: {len(unmatched)} (⚠️ NO CRM TRACKING - ACTION REQUIRED)",
+                f"  Total Unmatched: {len(unmatched)} (NO CRM TRACKING - ACTION REQUIRED)",
                 f"  Active Engagements: {active_engagement}",
-                f"  🚨 Expired without CRM: {expired_no_crm}",
-                f"  ⚠️ Critical/Expired without CRM: {critical_no_crm}",
+                f"  Expired without CRM: {expired_no_crm}",
+                f"  Critical/Expired without CRM: {critical_no_crm}",
                 ""
             ]
             
             if matched:
                 output_parts.extend([
                     "=" * 80,
-                    "✅ MATCHED CONTRACTS (CRM Tracking Active):",
+                    "MATCHED CONTRACTS (CRM Tracking Active):",
                     "=" * 80
                 ])
                 
@@ -499,31 +499,31 @@ Now analyze and respond:"""
                     
                     output_parts.extend([
                         "",
-                        f"📄 {product} - {contract.get('file_name', 'Unknown')}",
+                        f"{product} - {contract.get('file_name', 'Unknown')}",
                         f"   Contract Status: {status.upper()}",
                         f"   End Date: {end_date}",
                     ])
                     
                     if days_until is not None:
                         if days_until < 0:
-                            output_parts.append(f"   ⏰ EXPIRED {abs(days_until)} days ago")
+                            output_parts.append(f"   EXPIRED {abs(days_until)} days ago")
                         else:
-                            output_parts.append(f"   ⏰ {days_until} days until renewal")
+                            output_parts.append(f"   {days_until} days until renewal")
                     
                     output_parts.extend([
-                        f"   🎯 Renewal Urgency: {urgency}",
-                        f"   {'🔄 RENEWAL CONTRACT' if is_renewal else '📝 Initial Contract'}",
+                        f"   Renewal Urgency: {urgency}",
+                        f"   {'RENEWAL CONTRACT' if is_renewal else 'Initial Contract'}",
                         "",
                         f"   CRM LINKAGE:",
-                        f"   {'✅ ACTIVE ENGAGEMENT' if active_eng else '⚠️ NOT ACTIVE'} - {crm_stage}",
+                        f"   {'ACTIVE ENGAGEMENT' if active_eng else 'NOT ACTIVE'} - {crm_stage}",
                     ])
                     
                     for opp in opportunities:
                         stage = opp.get('stage', 'Unknown')
-                        stage_emoji = "✅" if stage == "Won" else "❌" if stage == "Lost" else "🔄"
+                        stage_status = "WON" if stage == "Won" else "LOST" if stage == "Lost" else "IN PROGRESS"
                         opp_num = opp.get('opportunity_number', '?')
                         output_parts.extend([
-                            f"   {stage_emoji} CRM #{opp_num}: {opp.get('opportunity_name', 'Unknown')}",
+                            f"   [{stage_status}] CRM #{opp_num}: {opp.get('opportunity_name', 'Unknown')}",
                             f"      Owner: {opp.get('owner', 'Unknown')}",
                             f"      Stage: {stage}",
                             f"      Amount: {opp.get('amount', '$0')}",
@@ -534,7 +534,7 @@ Now analyze and respond:"""
                 output_parts.extend([
                     "",
                     "=" * 80,
-                    "🚨 UNMATCHED CONTRACTS - IMMEDIATE ACTION REQUIRED!",
+                    "UNMATCHED CONTRACTS - IMMEDIATE ACTION REQUIRED!",
                     "=" * 80,
                     "These contracts have NO CRM opportunity tracking.",
                     "Someone needs to act on these NOW!",
@@ -552,27 +552,27 @@ Now analyze and respond:"""
                     days_until = item.get("days_until_renewal")
                     urgency_msg = item.get("urgency_message", "")
                     
-                    urgency_emoji = "🚨" if urgency in ["EXPIRED", "CRITICAL"] else "⚠️" if urgency == "HIGH" else "📋"
+                    urgency_prefix = "[URGENT]" if urgency in ["EXPIRED", "CRITICAL"] else "[HIGH]" if urgency == "HIGH" else "[NORMAL]"
                     
                     output_parts.extend([
                         "",
-                        f"{urgency_emoji} {item.get('contract_product', 'Unknown')} - {contract.get('file_name', 'Unknown')}",
+                        f"{urgency_prefix} {item.get('contract_product', 'Unknown')} - {contract.get('file_name', 'Unknown')}",
                         f"   Contract Status: {item.get('contract_status', 'unknown').upper()}",
                         f"   End Date: {item.get('contract_end', 'Unknown')}",
                     ])
                     
                     if days_until is not None:
                         if days_until < 0:
-                            output_parts.append(f"   ⏰ EXPIRED {abs(days_until)} days ago")
+                            output_parts.append(f"   EXPIRED {abs(days_until)} days ago")
                         else:
-                            output_parts.append(f"   ⏰ {days_until} days until renewal")
+                            output_parts.append(f"   {days_until} days until renewal")
                     
                     output_parts.extend([
-                        f"   🎯 Urgency Level: {urgency}",
-                        f"   ❌ NO CRM OPPORTUNITY FOUND",
-                        f"   ⚡ {urgency_msg}",
-                        f"   📝 Action Required: {item.get('action_required', 'Create CRM opportunity')}",
-                        f"   💡 Why no match: {item.get('reason', 'Unknown')}"
+                        f"   Urgency Level: {urgency}",
+                        f"   NO CRM OPPORTUNITY FOUND",
+                        f"   {urgency_msg}",
+                        f"   Action Required: {item.get('action_required', 'Create CRM opportunity')}",
+                        f"   Why no match: {item.get('reason', 'Unknown')}"
                     ])
             
             output_parts.extend([
@@ -580,13 +580,13 @@ Now analyze and respond:"""
                 "=" * 80,
                 "KEY INSIGHTS:",
                 "=" * 80,
-                f"• {len(matched)} contracts have CRM tracking (someone is working on them)",
-                f"• {len(unmatched)} contracts have NO CRM tracking (need immediate attention)",
-                f"• {active_engagement} contracts have ACTIVE engagement (not lost/won)",
+                f"- {len(matched)} contracts have CRM tracking (someone is working on them)",
+                f"- {len(unmatched)} contracts have NO CRM tracking (need immediate attention)",
+                f"- {active_engagement} contracts have ACTIVE engagement (not lost/won)",
             ])
             
             if critical_no_crm > 0:
-                output_parts.append(f"• 🚨 {critical_no_crm} CRITICAL contracts without CRM - ACT NOW!")
+                output_parts.append(f"- {critical_no_crm} CRITICAL contracts without CRM - ACT NOW!")
             
             output_parts.extend([
                 "",

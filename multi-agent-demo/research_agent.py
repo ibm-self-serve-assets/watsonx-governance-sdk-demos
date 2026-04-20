@@ -514,7 +514,7 @@ def synthesize_profile_node(state: ResearchState) -> dict:
         )
 
         # Merge into external_data so the action_agent's extract_executive_info
-        # regex can optionally find them (belt-and-suspenders — action_agent
+        # regex can optionally find them (belt-and-suspenders - action_agent
         # also has its own hard-coded lookup as the primary fallback).
         existing_exec = external_data.get("executives", "") or ""
         if isinstance(existing_exec, str):

@@ -372,15 +372,15 @@ The Matching Agent returns enriched match objects containing:
 
 ================================================================================
 
-PROMPT 5.1: Draft Email Generation (ENHANCED)
-----------------------------------------------
-Location: action_agent.py, line 804
-Purpose: Generate professional executive outreach email with contract context, expansion opportunities, and previous signers
+PROMPT 5.1: Draft Email Generation (ENHANCED v6.0)
+---------------------------------------------------
+Location: action_agent.py, line 1266
+Purpose: Generate professional executive outreach email with contract context, expansion opportunities, and previous signers, with enhanced quality controls for word repetition and CRM note paraphrasing
 Model: meta-llama/llama-3-3-70b-instruct
 Parameters:
-  - max_new_tokens: 600
-  - temperature: 0.3
-  - decoding_method: sample
+  - max_new_tokens: 500
+  - temperature: 0.2
+  - decoding_method: greedy
 
 Template:
 ```
@@ -417,32 +417,33 @@ ADDITIONAL CONTEXT:
 - Top Priority Action: {top_step}
 - Why Contract Expired: {expiration_reason}
 
-EMAIL REQUIREMENTS:
-1. Use executive tone appropriate for {recipient_role} level
-2. Reference specific contract details (product, value, dates) naturally
-3. Acknowledge CRM status and next steps if available
-4. Convey urgency without being alarmist
-5. Include clear call to action with specific meeting request
-6. Keep it concise (under 200 words)
-7. Avoid legal jargon and operational details
-8. If name is provided, use it in greeting (e.g., 'Dear [Name]'), otherwise use role (e.g., 'Dear Chief Procurement Officer')
-9. Mention expansion opportunities if identified
-10. Reference previous signers if appropriate for continuity
-11. MUST end with EXACTLY this signature (no variations):
-    Best regards,
+WRITING RULES — follow every one:
+1. Output EXACTLY ONE email. No alternatives, no commentary, no markdown fences.
+2. Open with 'Subject:' on the first line, blank line, then 'Hi {greeting},'.
+3. Match this style closely: short, direct, conversational, and human — like a real seller follow-up, not a formal executive letter.
+4. Keep it to 2 short paragraphs, roughly 90-140 words total.
+5. In paragraph 1, say it was great connecting and ask whether sizing for the SPECIFIC renewal has been finalized. MUST mention the specific product(s) from CONTRACT FACTS above (e.g., 'watsonx renewal' or 'Cognos renewal') so it's clear which renewal you're discussing.
+6. In paragraph 2, mention the contract has expired and that you want to help get it in quickly. If appropriate, mention helping avoid a 5% penalty or exception-related delay in a natural, non-legalistic way.
+7. Ask if it would be helpful to schedule a call and invite questions.
+8. Mention the CRM account owner only if it feels natural; do not make the email sound internal or operational.
+9. Use the first name only in the greeting. Do not use full name or title in the greeting.
+10. Do not sound stiff, overly polished, or generic. Avoid phrases like 'I hope this message finds you well' and avoid heavy executive tone.
+11. CRITICAL: Do NOT repeat words in the same sentence or adjacent sentences (e.g., avoid 'forward...forward', 'renewal...renewal').
+12. CRITICAL: Do NOT quote CRM notes verbatim. Paraphrase professionally and naturally. CRM notes are internal context only - translate them into executive-appropriate language.
+13. Write naturally as if speaking to an executive peer. Avoid awkward phrasing or grammatically incorrect constructions.
+14. Close with exactly:
+    Regards,
     [Your Name]
-    IBM Seller
 
-Return ONLY the final email draft. Do NOT include:
-- Multiple versions or drafts
-- Editing notes or suggestions
-- Meta-commentary or explanations
-- Alternative phrasings
-
-Provide ONE complete, polished email ready to send.
+STOP immediately after the signature. Output nothing else.
 ```
 
-ENHANCEMENTS IN VERSION 5.0:
+ENHANCEMENTS IN VERSION 6.0 (2026-04-20):
+- CRITICAL: Prevents word repetition in same/adjacent sentences
+- CRITICAL: Requires professional paraphrasing of CRM notes (no verbatim quotes)
+- Ensures grammatically correct, natural executive-level language
+- Requires specific product mention (e.g., "watsonx renewal" not "the renewal")
+- Conversational, human tone (not stiff or overly formal)
 - Hard-coded Confluent executives (Shaun Clowes, Stephen Deasy, Jay Kreps, Rohan Sivaram)
 - All executives marked as "pre-acquisition" for context
 - Expansion opportunity context included in email
@@ -736,5 +737,5 @@ CRITICAL IMPLEMENTATION DETAILS
 
 ================================================================================
 
-LAST UPDATED: 2026-04-13
-VERSION: 5.0 - Updated with Coverage Period extraction, IBM Cloud Subscription product extraction, hard-coded Confluent executives, deduplication logic, all expired contracts filter, enhanced matching with Contract Expiration Date, and regex-based extraction strategies
+LAST UPDATED: 2026-04-20
+VERSION: 6.0 - Added email quality controls: word repetition prevention, CRM note paraphrasing requirement, natural language enforcement, specific product mention requirement. Removed all emojis from output. Updated with Coverage Period extraction, IBM Cloud Subscription product extraction, hard-coded Confluent executives, deduplication logic, all expired contracts filter, enhanced matching with Contract Expiration Date, and regex-based extraction strategies.

@@ -652,5 +652,5 @@ A: Check that matching_agent.py is using Contract Expiration Date from CRM and h
 
 ================================================================================
 
-LAST UPDATED: 2026-04-13
-VERSION: 5.0 - Updated with Coverage Period extraction, IBM Cloud Subscription product extraction, deduplication logic, all expired contracts filter, enhanced matching with Contract Expiration Date, and complete Confluent executive team
+LAST UPDATED: 2026-04-20
+VERSION: 6.0 - Added email quality controls (word repetition prevention, CRM note paraphrasing), removed all emojis from outputs, cleaned up notebook comments. Updated with Coverage Period extraction, IBM Cloud Subscription product extraction, deduplication logic, all expired contracts filter, enhanced matching with Contract Expiration Date, and complete Confluent executive team.
