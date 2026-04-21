@@ -209,31 +209,47 @@ Now analyze and respond:"""
         try:
             response = llm.invoke(prompt)
             
-            # Parse LLM response
+            # Parse LLM response with more robust parsing
             matching_opps = []
             confidence = "low"
             reasoning = "Unable to parse LLM response"
             
-            lines = response.strip().split('\n')
-            for line in lines:
-                if line.startswith("MATCHED_OPPORTUNITIES:"):
-                    matched_str = line.split(":", 1)[1].strip()
-                    if matched_str.upper() != "NONE":
-                        # Extract numbers - these are CRM opportunity numbers
-                        import re
-                        numbers = re.findall(r'\d+', matched_str)
-                        # Match by opportunity_number field
+            import re
+            
+            # Try to extract the full response text
+            response_text = response.strip() if isinstance(response, str) else str(response)
+            
+            # More flexible parsing - look for patterns anywhere in response
+            # Look for MATCHED_OPPORTUNITIES
+            matched_pattern = re.search(r'MATCHED_OPPORTUNITIES:\s*(.+?)(?:\n|$)', response_text, re.IGNORECASE)
+            if matched_pattern:
+                matched_str = matched_pattern.group(1).strip()
+                if matched_str.upper() != "NONE" and matched_str:
+                    # Extract numbers - these are CRM opportunity numbers
+                    numbers = re.findall(r'\d+', matched_str)
+                    if numbers:
                         matched_numbers = [int(n) for n in numbers]
                         matching_opps = [opp for opp in opportunities if opp.get('opportunity_number') in matched_numbers]
-                elif line.startswith("CONFIDENCE:"):
-                    confidence = line.split(":", 1)[1].strip().lower()
-                elif line.startswith("REASONING:"):
-                    reasoning = line.split(":", 1)[1].strip()
+            
+            # Look for CONFIDENCE
+            confidence_pattern = re.search(r'CONFIDENCE:\s*(\w+)', response_text, re.IGNORECASE)
+            if confidence_pattern:
+                confidence = confidence_pattern.group(1).strip().lower()
+            
+            # Look for REASONING - capture everything after it
+            reasoning_pattern = re.search(r'REASONING:\s*(.+?)(?:\n\n|\Z)', response_text, re.IGNORECASE | re.DOTALL)
+            if reasoning_pattern:
+                reasoning = reasoning_pattern.group(1).strip()
+            else:
+                # If no reasoning found, use the whole response as reasoning
+                reasoning = response_text[:200] if len(response_text) > 200 else response_text
             
             print(f"\nLLM Matching for {filename}:")
             print(f"  Matched: {len(matching_opps)} opportunities")
             print(f"  Confidence: {confidence}")
             print(f"  Reasoning: {reasoning[:100]}...")
+            if not matched_pattern:
+                print(f"  [DEBUG] Raw response preview: {response_text[:200]}...")
             
             return matching_opps, confidence, reasoning
             
