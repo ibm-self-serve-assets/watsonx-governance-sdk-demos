@@ -817,8 +817,6 @@ class ActionAgent:
                     owner = crm_match.get('owner', 'the account owner')
                     email_style_context.append(f"CRM owner: {owner}")
                     email_style_context.append(f"CRM next steps: {next_steps_text}")
-                    if "sizing" in str(next_steps_text).lower():
-                        email_style_context.append("Ask if sizing has been finalized")
                 
                 if urgency and urgency.get('days_expired', 0) > 0:
                     email_style_context.append("Mention the contract has already expired")
@@ -833,7 +831,7 @@ class ActionAgent:
                 if urgency and crm_match:
                     urgency_reasons = []
                     urgency_reasons.append(f"Contract expired {urgency['days_expired']} days ago")
-                    urgency_reasons.append(f"${value} renewal opportunity at risk")
+                    urgency_reasons.append(f"{value} renewal opportunity at risk")
                     
                     next_steps = str(crm_match.get('next_steps', '')).lower()
                     if "sizing" in next_steps:
@@ -848,7 +846,7 @@ class ActionAgent:
                     reasoning_parts.extend([f"- {reason}" for reason in urgency_reasons])
                 elif urgency:
                     reasoning_parts.append(f"- Contract expired {urgency['days_expired']} days ago with no CRM tracking")
-                    reasoning_parts.append(f"- ${value} at risk with no visibility into renewal status")
+                    reasoning_parts.append(f"- {value} at risk with no visibility into renewal status")
                     reasoning_parts.append(f"- CRITICAL: {expiration_analysis['action']}")
                 
                 reasoning_parts.append("")
@@ -912,7 +910,7 @@ class ActionAgent:
                 reasoning_parts.append("")
                 reasoning_parts.append("WHY THIS MATTERS:")
                 reasoning_parts.extend([
-                    f"- ${value} revenue at risk",
+                    f"- {value} revenue at risk",
                     f"- Customer relationship continuity depends on quick action",
                     f"- Extended gap increases competitive vulnerability",
                     f"- May impact future expansion opportunities with this customer",
@@ -1253,7 +1251,7 @@ class ActionAgent:
                     f"CRM Stage: {crm_stage_str}\n"
                     f"Account Owner in CRM: {crm_owner_str}\n\n"
                     "The email MUST directly address what the CRM next steps say. "
-                    "If the next steps mention sizing, address that. If they mention a specific meeting or decision, reference it. "
+                    "If they mention a specific meeting or decision, reference it. "
                     "If there is an account owner noted above, mention coordinating with them."
                 )
             else:
@@ -1290,8 +1288,8 @@ class ActionAgent:
                 "2. Open with 'Subject:' on the first line, blank line, then 'Hi {greeting},'.\n"
                 "3. Match this style closely: short, direct, conversational, and human - like a real seller follow-up, not a formal executive letter.\n"
                 "4. Keep it to 2 short paragraphs, roughly 90-140 words total.\n"
-                "5. In paragraph 1, say it was great connecting and ask whether sizing for the SPECIFIC renewal has been finalized. MUST mention the specific product(s) from CONTRACT FACTS above (e.g., 'watsonx renewal' or 'Cognos renewal') so it's clear which renewal you're discussing.\n"
-                "6. In paragraph 2, mention the contract has expired and that you want to help get it in quickly. If appropriate, mention helping avoid a 5% penalty or exception-related delay in a natural, non-legalistic way.\n"
+                "5. In paragraph 1, say it was great connecting and ask about the status of the SPECIFIC renewal. MUST mention the specific product(s) from CONTRACT FACTS above (e.g., 'watsonx renewal' or 'Cognos renewal') so it's clear which renewal you're discussing.\n"
+                "6. In paragraph 2, mention the contract has expired and that you want to help get it renewed quickly. If appropriate, mention helping avoid delays in a natural, non-legalistic way.\n"
                 "7. Ask if it would be helpful to schedule a call and invite questions.\n"
                 "8. Mention the CRM account owner only if it feels natural; do not make the email sound internal or operational.\n"
                 "9. Use the first name only in the greeting. Do not use full name or title in the greeting.\n"
