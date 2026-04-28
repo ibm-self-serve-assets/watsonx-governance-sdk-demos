@@ -23,11 +23,17 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Import governance components
+from ibm_watsonx_gov.evaluators.agentic_evaluator import AgenticEvaluator
+from ibm_watsonx_gov.config import AgenticAIConfiguration
+from ibm_watsonx_gov.metrics import FaithfulnessMetric, ContextRelevanceMetric
+from ibm_watsonx_gov.entities.llm_judge import LLMJudge
+
 # Import our specialized agents
-from contract_agent import ContractAgent
-from research_agent import research_partner
-from matching_agent import MatchingAgent
-from action_agent import ActionAgent
+from agents.contract_agent import ContractAgent
+from agents.research_agent import research_partner
+from agents.matching_agent import MatchingAgent
+from agents.action_agent import ActionAgent
 
 
 # ============================================================================
@@ -40,6 +46,7 @@ class SupervisoryState(TypedDict):
     contract_file_path: Optional[str]
     partner_name: Optional[str]
     messages: Annotated[list, operator.add]
+    message_id: NotRequired[str]
     
     # Agent outputs
     contract_summary: NotRequired[dict]
@@ -78,7 +85,9 @@ class SupervisoryAgent:
         apikey: Optional[str] = None,
         project_id: Optional[str] = None,
         contract_vector_store_path: str = "./contract_vector_store",
-        crm_file_path: str = "docs/Confluent Sales Cloud Infor.xlsx"
+        crm_file_path: str = "docs/Confluent Sales Cloud Infor.xlsx",
+        evaluator: Optional[AgenticEvaluator] = None,
+        llm_judge: Optional[LLMJudge] = None
     ):
         """
         Initialize Supervisory Agent.
@@ -90,6 +99,8 @@ class SupervisoryAgent:
             project_id: Watsonx project ID (defaults to WATSONX_PROJECT_ID env var)
             contract_vector_store_path: Path for contract vector store
             crm_file_path: Path to CRM Excel file
+            evaluator: Optional AgenticEvaluator for governance metrics
+            llm_judge: Optional LLMJudge for quality evaluation
         """
         self.model_id = model_id
         self.url = url
@@ -99,6 +110,10 @@ class SupervisoryAgent:
         self.contract_vector_store_path = contract_vector_store_path
         self.crm_file_path = crm_file_path
         self.graph = None
+        
+        # Store governance components
+        self.evaluator = evaluator
+        self.llm_judge = llm_judge
         
         # Validate credentials
         if not self.apikey:
@@ -196,6 +211,9 @@ class SupervisoryAgent:
     def build_agent(self):
         """Build the LangGraph for supervisory workflow"""
         
+        # Store reference to self for use in nested functions
+        supervisor_self = self
+        
         def initialize_workflow_node(state: SupervisoryState) -> dict:
             """Initialize workflow by interpreting seller query"""
             seller_query = state["seller_query"]
@@ -240,8 +258,12 @@ class SupervisoryAgent:
                 "messages": [f"Workflow initialized: {workflow_type} using {', '.join(required_agents)}"]
             }
         
-        def execute_contract_agent_node(state: SupervisoryState) -> dict:
+        def execute_contract_agent_node_impl(state: SupervisoryState, config=None) -> dict:
             """Execute Contract Agent as a portfolio-wide pre-step across all partner contracts"""
+            print(f"\n[DEBUG CONTRACT NODE] Function called")
+            print(f"[DEBUG CONTRACT NODE] State keys: {list(state.keys())}")
+            print(f"[DEBUG CONTRACT NODE] message_id in state: {state.get('message_id')}")
+            
             partner_name = state.get("partner_name") or "Confluent"
 
             print(f"\n{'='*80}")
@@ -251,9 +273,9 @@ class SupervisoryAgent:
             print("Contract scope: all files in docs/ beginning with Confluent_IBM")
 
             try:
-                discovered_paths = self.contract_agent.discover_partner_contracts(partner_name)
+                discovered_paths = supervisor_self.contract_agent.discover_partner_contracts(partner_name)
 
-                result = self.contract_agent.run_portfolio(
+                result = supervisor_self.contract_agent.run_portfolio(
                     partner_name=partner_name,
                     contract_paths=discovered_paths
                 )
@@ -261,22 +283,44 @@ class SupervisoryAgent:
                 print("\nContract Agent completed successfully")
                 print(f"Contracts processed: {len(result.get('contract_paths', []))}")
 
-                return {
-                    "contract_summary": result,
-                    "partner_name": partner_name,
-                    "workflow_stage": "contract_complete",
-                    "messages": ["Contract portfolio preloaded successfully"]
-                }
+                # Return ONLY the context field being evaluated (RAG pattern)
+                return {"contract_summary": result if result else {}}
 
             except Exception as e:
                 print(f"\nContract Agent error: {str(e)}")
-                return {
-                    "contract_summary": {"error": str(e)},
-                    "messages": [f"Contract Agent error: {str(e)}"]
-                }
+                # Return ONLY the context field being evaluated, even on error
+                return {"contract_summary": {"error": str(e)}}
         
-        def execute_research_agent_node(state: SupervisoryState) -> dict:
+        # Apply decorator if evaluator and llm_judge are available
+        print(f"\n[DEBUG DECORATOR] Applying decorators - evaluator: {self.evaluator is not None}, llm_judge: {self.llm_judge is not None}")
+        
+        if self.evaluator and self.llm_judge:
+            print("[DEBUG DECORATOR] CONTRACT NODE - Applying evaluate_retrieval_quality decorator")
+            contract_config = AgenticAIConfiguration(
+                input_fields=["seller_query", "partner_name"],
+                output_fields=["contract_summary"],
+                message_id=["message_id"]
+            )
+            print(f"[DEBUG DECORATOR] CONTRACT CONFIG - input_fields: {contract_config.input_fields}")
+            print(f"[DEBUG DECORATOR] CONTRACT CONFIG - context_fields: {contract_config.context_fields}")
+            print(f"[DEBUG DECORATOR] CONTRACT CONFIG - message_id field: message_id")
+            
+            execute_contract_agent_node = self.evaluator.evaluate_retrieval_quality(
+                configuration=contract_config,
+                metrics=[ContextRelevanceMetric(llm_judge=self.llm_judge)],
+                compute_real_time=True
+            )(execute_contract_agent_node_impl)
+            print("[DEBUG DECORATOR] CONTRACT NODE - Decorator applied successfully")
+        else:
+            print("[DEBUG DECORATOR] CONTRACT NODE - Decorators NOT applied (missing evaluator or llm_judge)")
+            execute_contract_agent_node = execute_contract_agent_node_impl
+        
+        def execute_research_agent_node_impl(state: SupervisoryState, config=None) -> dict:
             """Execute Research Agent to enrich partner context"""
+            print(f"\n[DEBUG RESEARCH NODE] Function called")
+            print(f"[DEBUG RESEARCH NODE] State keys: {list(state.keys())}")
+            print(f"[DEBUG RESEARCH NODE] message_id in state: {state.get('message_id')}")
+            
             partner_name = state.get("partner_name")
             
             if not partner_name:
@@ -292,10 +336,8 @@ class SupervisoryAgent:
                                 break
             
             if not partner_name:
-                return {
-                    "partner_profile": {"error": "No partner name available"},
-                    "messages": ["Research Agent skipped - no partner name"]
-                }
+                # Return ONLY the context field being evaluated (RAG pattern)
+                return {"partner_profile": {"error": "No partner name available"}}
             
             print(f"\n{'='*80}")
             print("EXECUTING RESEARCH AGENT")
@@ -310,28 +352,42 @@ class SupervisoryAgent:
                 print(f"Maturity Level: {partner_profile.get('maturity_level', 'Unknown')}")
                 print(f"Sales Velocity: {partner_profile.get('sales_velocity', 'Unknown')}")
                 
-                return {
-                    "partner_profile": partner_profile,
-                    "workflow_stage": "research_complete",
-                    "messages": ["Research Agent executed successfully"]
-                }
+                # Return ONLY the context field being evaluated (RAG pattern)
+                return {"partner_profile": partner_profile if partner_profile else {}}
             
             except Exception as e:
                 print(f"\nResearch Agent error: {str(e)}")
-                return {
-                    "partner_profile": {"error": str(e), "partner_name": partner_name},
-                    "messages": [f"Research Agent error: {str(e)}"]
-                }
-        def execute_matching_agent_node(state: SupervisoryState) -> dict:
+                # Return ONLY the context field being evaluated, even on error
+                return {"partner_profile": {"error": str(e), "partner_name": partner_name}}
+        
+        # Apply decorator if evaluator and llm_judge are available
+        if self.evaluator and self.llm_judge:
+            print("[DEBUG DECORATOR] RESEARCH NODE - Applying evaluate_retrieval_quality decorator")
+            research_config = AgenticAIConfiguration(
+                input_fields=["seller_query", "partner_name"],
+                output_fields=["partner_profile"],
+                message_id=["message_id"]
+            )
+            print(f"[DEBUG DECORATOR] RESEARCH CONFIG - input_fields: {research_config.input_fields}")
+            print(f"[DEBUG DECORATOR] RESEARCH CONFIG - context_fields: {research_config.context_fields}")
+            
+            execute_research_agent_node = self.evaluator.evaluate_retrieval_quality(
+                configuration=research_config,
+                metrics=[ContextRelevanceMetric(llm_judge=self.llm_judge)],
+                compute_real_time=True
+            )(execute_research_agent_node_impl)
+            print("[DEBUG DECORATOR] RESEARCH NODE - Decorator applied successfully")
+        else:
+            print("[DEBUG DECORATOR] RESEARCH NODE - Decorators NOT applied")
+            execute_research_agent_node = execute_research_agent_node_impl
+        def execute_matching_agent_node(state: SupervisoryState, config=None) -> dict:
             """Execute Matching Agent to correlate contracts with CRM opportunities"""
             contract_summary = state.get("contract_summary", {})
             partner_profile = state.get("partner_profile", {})
             
             if not contract_summary:
-                return {
-                    "matching_data": {"error": "Missing contract context"},
-                    "messages": ["Matching Agent skipped - missing contract context"]
-                }
+                # Return only the primary field (RAG pattern)
+                return {"matching_data": {"error": "Missing contract context"}}
             
             print(f"\n{'='*80}")
             print("EXECUTING MATCHING AGENT")
@@ -346,7 +402,7 @@ class SupervisoryAgent:
                 crm_opportunities = sales_history.get("opportunities", [])
                 
                 # Run Matching Agent
-                result = self.matching_agent.run(
+                result = supervisor_self.matching_agent.run(
                     contract_portfolio=contract_summary,
                     crm_opportunities=crm_opportunities
                 )
@@ -356,38 +412,34 @@ class SupervisoryAgent:
                 unmatched_count = len(result.get("unmatched_contracts", []))
                 print(f"Matched: {matched_count}, Unmatched: {unmatched_count}")
                 
-                return {
-                    "matching_data": result,
-                    "workflow_stage": "matching_complete",
-                    "messages": ["Matching Agent executed successfully"]
-                }
+                # Return only the primary field (RAG pattern)
+                return {"matching_data": result}
             
             except Exception as e:
                 print(f"\nMatching Agent error: {str(e)}")
-                return {
-                    "matching_data": {"error": str(e)},
-                    "messages": [f"Matching Agent error: {str(e)}"]
-                }
+                # Return only the primary field, even on error
+                return {"matching_data": {"error": str(e)}}
         
         
-        def execute_action_agent_node(state: SupervisoryState) -> dict:
+        def execute_action_agent_node_impl(state: SupervisoryState, config=None) -> dict:
             """Execute Action Agent to determine next best action"""
+            print(f"\n[DEBUG ACTION NODE] Function called")
+            print(f"[DEBUG ACTION NODE] State keys: {list(state.keys())}")
+            print(f"[DEBUG ACTION NODE] message_id in state: {state.get('message_id')}")
+            
+            # READ context from state (RAG pattern - don't return context)
             contract_summary = state.get("contract_summary", {})
             partner_profile = state.get("partner_profile", {})
-            matching_data = state.get("matching_data", {})  # NEW: Get matching data
+            matching_data = state.get("matching_data", {})
             required_agents = state.get("required_agents", [])
             
             if not contract_summary:
-                return {
-                    "action_recommendation": {"error": "Missing contract context"},
-                    "messages": ["Action Agent skipped - missing contract context"]
-                }
+                # Return ONLY the output field being evaluated (RAG pattern)
+                return {"action_recommendation": {"error": "Missing contract context"}}
 
             if "research" in required_agents and not partner_profile:
-                return {
-                    "action_recommendation": {"error": "Missing required context"},
-                    "messages": ["Action Agent skipped - insufficient context"]
-                }
+                # Return ONLY the output field being evaluated (RAG pattern)
+                return {"action_recommendation": {"error": "Missing required context"}}
             
             print(f"\n{'='*80}")
             print("EXECUTING ACTION AGENT")
@@ -395,7 +447,7 @@ class SupervisoryAgent:
             
             try:
                 # Run Action Agent with matching data
-                result = self.action_agent.run(
+                result = supervisor_self.action_agent.run(
                     contract_summary,
                     partner_profile or {"partner_name": state.get("partner_name", "Confluent")},
                     state.get("seller_query", ""),
@@ -406,18 +458,37 @@ class SupervisoryAgent:
                 risk_level = result.get("risk_assessment", {}).get("risk_level", "Unknown")
                 print(f"Risk Level: {risk_level}")
                 
-                return {
-                    "action_recommendation": result,
-                    "workflow_stage": "action_complete",
-                    "messages": ["Action Agent executed successfully"]
-                }
+                # Return ONLY the output field being evaluated (RAG pattern)
+                # Context is READ from state, not returned
+                return {"action_recommendation": result if result else {}}
             
             except Exception as e:
                 print(f"\nAction Agent error: {str(e)}")
-                return {
-                    "action_recommendation": {"error": str(e)},
-                    "messages": [f"Action Agent error: {str(e)}"]
-                }
+                # Return ONLY the output field being evaluated, even on error
+                return {"action_recommendation": {"error": str(e)}}
+        
+        # Apply decorator if evaluator and llm_judge are available
+        if self.evaluator and self.llm_judge:
+            print("[DEBUG DECORATOR] ACTION NODE - Applying evaluate_faithfulness decorator")
+            action_config = AgenticAIConfiguration(
+                input_fields=["seller_query", "partner_name"],
+                context_fields=["contract_summary", "partner_profile"],
+                output_fields=["action_recommendation.final_output", "action_recommendation.draft_email"],
+                message_id=["message_id"]
+            )
+            print(f"[DEBUG DECORATOR] ACTION CONFIG - input_fields: {action_config.input_fields}")
+            print(f"[DEBUG DECORATOR] ACTION CONFIG - context_fields: {action_config.context_fields}")
+            print(f"[DEBUG DECORATOR] ACTION CONFIG - output_fields: {action_config.output_fields}")
+            
+            execute_action_agent_node = self.evaluator.evaluate_faithfulness(
+                configuration=action_config,
+                metrics=[FaithfulnessMetric(llm_judge=self.llm_judge)],
+                compute_real_time=True
+            )(execute_action_agent_node_impl)
+            print("[DEBUG DECORATOR] ACTION NODE - Decorator applied successfully")
+        else:
+            print("[DEBUG DECORATOR] ACTION NODE - Decorators NOT applied")
+            execute_action_agent_node = execute_action_agent_node_impl
         
         def generate_final_result_node(state: SupervisoryState) -> dict:
             """Generate final result for seller"""
@@ -663,7 +734,8 @@ class SupervisoryAgent:
         self,
         seller_query: str,
         contract_file_path: Optional[str] = None,
-        partner_name: Optional[str] = None
+        partner_name: Optional[str] = None,
+        message_id: Optional[str] = None
     ) -> dict:
         """
         Run the complete supervisory workflow.
@@ -672,6 +744,7 @@ class SupervisoryAgent:
             seller_query: Natural language query from seller
             contract_file_path: Optional legacy contract path; portfolio workflow uses all docs/Confluent_IBM*.docx
             partner_name: Optional partner name (will be extracted if not provided)
+            message_id: Optional unique message ID for governance tracking
 
         Returns:
             Final state with complete workflow results
@@ -683,7 +756,8 @@ class SupervisoryAgent:
             "seller_query": seller_query,
             "contract_file_path": contract_file_path,
             "partner_name": partner_name,
-            "messages": []
+            "messages": [],
+            "message_id": message_id
         }
 
         result = self.graph.invoke(initial_state)

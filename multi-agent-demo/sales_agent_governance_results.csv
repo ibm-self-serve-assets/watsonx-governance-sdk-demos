@@ -1,0 +1,2 @@
+message_id,action_agent.latency,contract_agent.latency,generate_result.latency,initialize.latency,matching_agent.latency,message.cost,message.duration,message.input_token_count,message.output_token_count,research_agent.latency
+5ba91faf7a024204f7c1bd874da5e709,12.6444,25.5604,0.0188,9.4919,87.67,0.0099,166.2556,10571.0,3419.0,30.8076

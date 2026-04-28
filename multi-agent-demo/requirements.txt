@@ -8,8 +8,8 @@ langchain-tavily>=0.1.0
 langchain-chroma>=0.1.0
 typing-extensions>=4.0.0
 
-# watsonx.governance SDK and dependencies
-ibm-watsonx-gov>=1.0.0
+# watsonx.governance SDK and dependencies - CRITICAL: Must include [agentic] extra
+ibm-watsonx-gov[agentic]>=1.4.0
 ibm-agent-analytics>=0.6.1
 textstat>=0.7.0
 jsonpath-ng>=1.6.0

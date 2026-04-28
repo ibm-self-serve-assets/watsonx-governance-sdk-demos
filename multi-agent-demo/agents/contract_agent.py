@@ -150,7 +150,7 @@ class ContractAgent:
     
     def _load_cache(self):
         """Load contract cache from JSON file"""
-        cache_file = "contracts_cache.json"
+        cache_file = "utils/contracts_cache.json"
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, 'r') as f:
